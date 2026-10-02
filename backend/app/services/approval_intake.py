@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.domain.approval import PublicationEnvelope, parse_publish_command
 from app.domain.preview import PendingPreview, approve_preview
 from app.domain.telegram import InboundText, OwnerBinding
+from app.services.topic_workflow import handle_topic_message
 
 
 class ApprovalIntakeError(RuntimeError):
@@ -33,6 +34,9 @@ async def process_next_owner_message(db, installation_id: str, publishing_enable
         return None
     command = parse_publish_command(message["text"])
     if command is None:
+        topic_result = await handle_topic_message(db, message, installation_id)
+        if topic_result is not None:
+            return topic_result
         await db.messages.update_one(
             {"_id": message["_id"], "status": "accepted_unprocessed"},
             {"$set": {"status": "unhandled", "processed_at": datetime.now(timezone.utc)}},

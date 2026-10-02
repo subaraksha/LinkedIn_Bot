@@ -11,6 +11,9 @@ from app.integrations.telegram_pairing import (
     record_owner_update, release_receiver,
 )
 from app.services.approval_intake import drain_owner_messages
+from app.services.topic_workflow import (
+    dispatch_topic_messages, reminder_tick, run_research_job, schedule_tick,
+)
 from app.services.publication import (
     PublicationError, dispatch_publication_notice, publish_one, recover_inflight,
 )
@@ -29,6 +32,7 @@ async def receive() -> None:
     mongo = mongo_client(settings.mongodb_uri)
     lease_token = secrets.token_urlsafe(24)
     bot_id = None
+    research_task = None
     try:
         identity = await telegram.identity()
         bot_id = identity["id"]
@@ -48,9 +52,31 @@ async def receive() -> None:
             f"publishing {'enabled' if settings.publishing_enabled else 'disabled'}",
             flush=True,
         )
+        poll_failures = 0
         while True:
+            if research_task and research_task.done():
+                try:
+                    research_task.result()
+                except Exception:
+                    print("Topic research needs attention; the job can be retried after its lease expires", flush=True)
+                research_task = None
+            await schedule_tick(db, installation_id)
+            await reminder_tick(db, installation_id)
+            if research_task is None and settings.gemini_api_key and settings.gemini_model:
+                research_task = asyncio.create_task(run_research_job(
+                    db, installation_id, settings.gemini_api_key, settings.gemini_model,
+                    lease_token))
             offset = await claim_receiver(db, installation_id, bot_id, lease_token, lease_seconds=90)
-            updates = await telegram.poll(offset, timeout=30)
+            try:
+                updates = await telegram.poll(offset, timeout=30)
+            except TelegramError:
+                if poll_failures == 0:
+                    await mark_receiver_restart(db, installation_id, bot_id)
+                    print("Telegram polling interrupted; retrying while saved research continues", flush=True)
+                poll_failures += 1
+                await asyncio.sleep(min(30, 2 ** min(poll_failures, 5)))
+                continue
+            poll_failures = 0
             counts = {"owner_input": 0, "rejected": 0}
             for update in updates:
                 try:
@@ -67,7 +93,14 @@ async def receive() -> None:
                 print(f"Saved {counts['owner_input']} owner message(s); rejected {counts['rejected']} update(s)", flush=True)
             await publish_one(db, settings, installation_id, bot_id, lease_token)
             await dispatch_publication_notice(db, telegram, bot_id)
+            await dispatch_topic_messages(db, telegram, installation_id)
     finally:
+        if research_task and not research_task.done():
+            research_task.cancel()
+            try:
+                await research_task
+            except asyncio.CancelledError:
+                pass
         if bot_id:
             try:
                 await release_receiver(mongo[settings.mongodb_database], bot_id, lease_token)

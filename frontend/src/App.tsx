@@ -28,6 +28,11 @@ type OwnerProfile = {
 };
 type ListField = "target_roles" | "interests" | "content_goals" | "avoid_phrases" | "avoid_styles" | "avoid_topics" | "confidential_details" | "writing_samples";
 type Question = { id: string; kind: string; prompt: string; fact_id: string | null; status: string; answer: string | null; revision: number };
+type Topic = { title: string; why_now: string; why_you: string; angle: string; sources: { url: string; title: string }[] };
+type TopicStatus = { schedule: { enabled: boolean; weekday: number; local_time: string; timezone: string; next_at: string | null; revision: number };
+  telegram_delivery_uncertain: boolean;
+  workflow: { state: string; shortlist_revision: number; shortlist: Topic[]; selected_topic: Topic | null;
+    perspective: string | null; experience: string; error?: string | null } | null };
 
 type Pairing = {
   status: string;
@@ -53,6 +58,9 @@ export default function App() {
   const [questionNotice, setQuestionNotice] = useState<string | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({});
+  const [topicStatus, setTopicStatus] = useState<TopicStatus | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState<TopicStatus["schedule"] | null>(null);
+  const [topicNotice, setTopicNotice] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState("LinkedIn profile text");
   const [sourceText, setSourceText] = useState("");
   const [resumeFile, setResumeFile] = useState<File | null>(null);
@@ -69,12 +77,22 @@ export default function App() {
   }, []);
 
   const loadKnowledge = useCallback(async () => {
-    const [response, statusResponse, questionsResponse] = await Promise.all([
+    const fetchAll = () => Promise.all([
       fetch("/api/v1/knowledge", { credentials: "same-origin" }),
       fetch("/api/v1/knowledge/export/status", { credentials: "same-origin" }),
       fetch("/api/v1/clarifications", { credentials: "same-origin" }),
     ]);
-    if (!response.ok || !statusResponse.ok || !questionsResponse.ok) throw new Error("Could not load professional information");
+    let [response, statusResponse, questionsResponse] = await fetchAll();
+    if ([response, statusResponse, questionsResponse].some(item => item.status >= 500)) {
+      await new Promise(resolve => window.setTimeout(resolve, 400));
+      [response, statusResponse, questionsResponse] = await fetchAll();
+    }
+    if ([response, statusResponse, questionsResponse].some(item => item.status === 401)) {
+      throw new Error("Your dashboard session expired. Open the latest local dashboard tab.");
+    }
+    if (!response.ok || !statusResponse.ok || !questionsResponse.ok) {
+      throw new Error("Professional information is temporarily unavailable. Refresh the page to try again.");
+    }
     setKnowledge((await response.json()) as Knowledge);
     setExportStatus((await statusResponse.json()) as ExportStatus);
     setQuestions(((await questionsResponse.json()) as { questions: Question[] }).questions);
@@ -84,6 +102,14 @@ export default function App() {
     const response = await fetch("/api/v1/owner/profile", { credentials: "same-origin" });
     if (!response.ok) throw new Error("Could not load goals and preferences");
     setProfileDraft((await response.json()) as OwnerProfile);
+  }, []);
+
+  const loadTopics = useCallback(async () => {
+    const response = await fetch("/api/v1/topics/status", { credentials: "same-origin" });
+    if (!response.ok) throw new Error("Could not load weekly topics");
+    const result = await response.json() as TopicStatus;
+    setTopicStatus(result);
+    setScheduleDraft(current => current?.revision === result.schedule.revision ? current : result.schedule);
   }, []);
 
   const loadPairing = useCallback(async () => {
@@ -99,10 +125,16 @@ export default function App() {
       })
       .then(({ csrf: value }) => {
         setCsrf(value);
-        return Promise.all([load(), loadPairing(), loadKnowledge(), loadOwnerProfile()]);
+        return Promise.all([load(), loadPairing(), loadKnowledge(), loadOwnerProfile(), loadTopics()]);
       })
       .catch((cause: Error) => setError(cause.message));
-  }, [load, loadPairing, loadKnowledge, loadOwnerProfile]);
+  }, [load, loadPairing, loadKnowledge, loadOwnerProfile, loadTopics]);
+
+  useEffect(() => {
+    if (!csrf) return;
+    const timer = window.setInterval(() => { void loadTopics().catch(() => undefined); }, 15000);
+    return () => window.clearInterval(timer);
+  }, [csrf, loadTopics]);
 
   useEffect(() => {
     if (pairing?.status !== "waiting" || !csrf) return;
@@ -285,6 +317,29 @@ export default function App() {
     } catch (cause) { setError((cause as Error).message); setBusy(false); }
   }
 
+  async function saveSchedule(event: React.FormEvent) {
+    event.preventDefault(); if (!scheduleDraft) return;
+    setBusy(true); setError(null); setTopicNotice(null);
+    try {
+      await mutate("/api/v1/topics/schedule", "PUT", {
+        expected_revision: scheduleDraft.revision, enabled: scheduleDraft.enabled,
+        weekday: scheduleDraft.weekday, local_time: scheduleDraft.local_time,
+        timezone: scheduleDraft.timezone,
+      });
+      await loadTopics(); setTopicNotice("Weekly invitation schedule saved.");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function startTopics() {
+    setBusy(true); setError(null); setTopicNotice(null);
+    try {
+      await post("/api/v1/topics/start");
+      await loadTopics(); setTopicNotice("Topic research started. The shortlist will appear here and in Telegram when ready.");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
   return (
     <main>
       <header>
@@ -336,6 +391,41 @@ export default function App() {
             {readiness.linkedin === "connected" ? "Reconnect LinkedIn" : "Connect LinkedIn"}
           </button>
           <p className="muted">Connecting an account does not publish a post.</p>
+        </section>
+        <section className="card">
+          <p className="eyebrow">WEEKLY TOPICS</p>
+          <h2>Find ideas to discuss</h2>
+          <p className="muted">Research uses the public feeds listed in <code>config/research-sources.json</code>. It does not draft or publish a post.</p>
+          {scheduleDraft && <form className="stack" onSubmit={(event) => void saveSchedule(event)}>
+            <label className="checkbox"><input type="checkbox" checked={scheduleDraft.enabled}
+              onChange={event => setScheduleDraft({ ...scheduleDraft, enabled: event.target.checked })} /> Send me a weekly invitation in Telegram</label>
+            <div className="form-grid">
+              <label>Day<select value={scheduleDraft.weekday} onChange={event => setScheduleDraft({ ...scheduleDraft, weekday: Number(event.target.value) })}>
+                {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>
+              <label>Local time<input type="time" value={scheduleDraft.local_time} onChange={event => setScheduleDraft({ ...scheduleDraft, local_time: event.target.value })} /></label>
+              <label>Timezone<input value={scheduleDraft.timezone} onChange={event => setScheduleDraft({ ...scheduleDraft, timezone: event.target.value })} /></label>
+            </div>
+            <button disabled={busy}>Save invitation schedule</button>
+            {topicStatus?.schedule.next_at && <p className="muted">Next invitation: {new Date(topicStatus.schedule.next_at).toLocaleString()}</p>}
+          </form>}
+          <button className="secondary" disabled={busy || !!topicStatus?.workflow || readiness.telegram !== "paired"} onClick={() => void startTopics()}>Find topics now</button>
+          {topicNotice && <p className="notice success" role="status">{topicNotice}</p>}
+          {topicStatus?.telegram_delivery_uncertain && <p className="notice error" role="alert">A Telegram topic message may not have arrived. Check your bot chat; the app will not resend it automatically.</p>}
+          {topicStatus?.workflow && <div className="record">
+            <p><strong>Current conversation: {label(topicStatus.workflow.state)}</strong></p>
+            {topicStatus.workflow.error && <p className="notice error">{topicStatus.workflow.error}</p>}
+            {topicStatus.workflow.selected_topic && <p>Selected: {topicStatus.workflow.selected_topic.title}</p>}
+            {topicStatus.workflow.perspective && <p className="muted">Your perspective has been saved.</p>}
+            {topicStatus.workflow.shortlist.map((topic, index) => <div className="record" key={`${topic.title}-${index}`}>
+              <h3>{index + 1}. {topic.title}</h3>
+              <p><strong>Why now:</strong> {topic.why_now}</p>
+              <p><strong>Why it fits:</strong> {topic.why_you}</p>
+              <p><strong>Possible angle:</strong> {topic.angle}</p>
+              <p>Sources: {topic.sources.map((source, sourceIndex) => <span key={source.url}>{sourceIndex > 0 ? ", " : ""}<a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></span>)}</p>
+            </div>)}
+            <p className="muted">Choose or reply in your paired Telegram chat. The bot will ask for your perspective before drafting begins.</p>
+          </div>}
+          <button className="secondary" disabled={busy} onClick={() => void loadTopics()}>Refresh topics</button>
         </section>
         <section className="card">
           <p className="eyebrow">YOUR DIRECTION</p>

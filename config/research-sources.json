@@ -1,0 +1,13 @@
+{
+  "lookback_days": 14,
+  "evergreen_days": 90,
+  "max_candidates": 40,
+  "max_pages": 12,
+  "feeds": [
+    {"name": "Python Insider", "url": "https://blog.python.org/rss.xml", "domain": "blog.python.org"},
+    {"name": "TypeScript", "url": "https://devblogs.microsoft.com/typescript/feed/", "domain": "devblogs.microsoft.com"},
+    {"name": "GitHub Changelog", "url": "https://github.blog/changelog/feed/", "domain": "github.blog"},
+    {"name": "OpenAI News", "url": "https://openai.com/news/rss.xml", "domain": "openai.com"},
+    {"name": "Google Developers", "url": "https://developers.googleblog.com/feeds/posts/default?alt=rss", "domain": "developers.googleblog.com"}
+  ]
+}
