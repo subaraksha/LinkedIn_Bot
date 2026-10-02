@@ -25,6 +25,7 @@ linkedin-agent-telegram-pair = "app.cli.telegram_pair:run"
 linkedin-agent-preview-demo = "app.cli.preview_demo:run"
 linkedin-agent-final-preview = "app.cli.final_preview:run"
 linkedin-agent-mongo-capability-probe = "app.cli.mongo_capability_probe:run"
+linkedin-agent-foundation = "app.cli.foundation:run"
 
 [build-system]
 requires = ["hatchling"]

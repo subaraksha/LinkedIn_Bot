@@ -1,5 +1,10 @@
 # Integration validation — V1
 
+## Phase 1 foundation check — 2 October 2026
+
+- Repeatable owner binding and indexes were checked in a uniquely named temporary database on the configured MongoDB cluster. The same installation could rerun setup; a different installation ID was rejected. Job enqueue deduplicated matching work and rejected a conflicting payload. A second worker could not claim an active lease, an expired lease could be reclaimed, and a stale worker could not complete it.
+- The temporary database was removed after the check. The foundation setup then completed against the configured owner database, preserving the existing connection and workflow records. This validates the database foundation only; the Phase 1 dashboard session and setup screens remain to be built.
+
 Validation now targets one owner installation, as agreed in PRD 1.3. Phase 0's narrow integration journey is complete. Full V1 recovery, scheduling, onboarding, and failure-hardening work remains in later phases.
 
 | Gate | Phase 0 status | Remaining V1 hardening |

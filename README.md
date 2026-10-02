@@ -13,6 +13,14 @@ Copy `.env.example` to a local `.env` when configuring integrations. The dashboa
 
 The API serves the built dashboard at `/` and local status at `/api/health` and `/api/readiness`. For frontend development, run `npm run dev --prefix frontend` alongside the API.
 
+## Phase 1 database foundation
+
+Run `uv run linkedin-agent-foundation --apply` after setting the MongoDB values in the ignored `.env`. It binds the configured database to this installation, fills missing owner metadata without replacing existing values, and creates the unique and lookup indexes needed for later features. The operation is repeatable. A conflicting owner binding or duplicate record stops setup instead of silently discarding data. The configured database is the only database changed by this command.
+
+The job store in `backend/app/storage/jobs.py` supports durable enqueue, duplicate suppression, lease claims, stale-worker rejection, and lease recovery. Future research and draft jobs will use it; the existing Phase 0 publication path keeps its separate one-shot send rules. Database foundation is in place, while the local dashboard session and setup flows are the next Phase 1 work.
+
+To repeat the foundation integration check without touching the owner database, run `RUN_MONGO_INTEGRATION=1 uv run python -m unittest tests.test_foundation_integration -q`. It creates and removes a uniquely named temporary database on the configured cluster.
+
 Starting the API does not send a Telegram message or publish to LinkedIn. Opening the dashboard checks connection status. The Phase 0 probes below include read-only provider checks and writes confined to a uniquely named temporary MongoDB database. Gate status is tracked in [integration validation](docs/integration-validation.md).
 
 ## Phase 0 probes
