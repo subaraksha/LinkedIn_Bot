@@ -2,13 +2,24 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 main { max-width: 860px; margin: 0 auto; padding: 72px 24px; }
+main { display: grid; gap: 20px; }
 header { margin-bottom: 44px; }
 .eyebrow { color: #26749b; font-size: 12px; font-weight: 700; letter-spacing: .12em; }
 h1 { font-size: clamp(32px, 5vw, 52px); letter-spacing: -.04em; margin: 12px 0; }
 header p:last-child { color: #526676; font-size: 17px; }
 .card { background: white; border: 1px solid #dce6ec; border-radius: 16px; padding: 28px; box-shadow: 0 8px 28px #17344a0a; }
+.card p { line-height: 1.5; }
 h2 { margin-top: 0; }
 .status { display: inline-block; background: #fff3d8; color: #76520a; padding: 6px 11px; border-radius: 8px; text-transform: capitalize; }
 ul { padding: 0; list-style: none; border-top: 1px solid #e5edf1; }
 li { display: flex; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid #e5edf1; text-transform: capitalize; }
 li strong { color: #61798a; font-weight: 500; }
+.muted { color: #61798a; }
+.notice { padding: 12px 16px; border-radius: 10px; }
+.error { background: #fff0ee; color: #a03b32; }
+.candidate { background: #f4f7fa; border-radius: 10px; padding: 16px; margin: 16px 0; }
+button { background: #176e94; color: white; border: 0; border-radius: 9px; padding: 11px 16px; font: inherit; font-weight: 650; cursor: pointer; }
+button:hover { background: #125a7a; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+button.secondary { background: #e6f1f6; color: #175674; }
+a { color: #176e94; font-weight: 650; }

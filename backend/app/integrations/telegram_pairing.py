@@ -56,7 +56,8 @@ def mongo_client(uri: str) -> AsyncMongoClient:
     )
 
 
-async def begin_pairing(db, installation_id: str, bot_id: str, challenge: str) -> None:
+async def begin_pairing(db, installation_id: str, bot_id: str, challenge: str,
+                        session_digest: str | None = None) -> None:
     owner = await db.owner_settings.find_one({"_id": "owner"})
     if not owner or owner.get("installation_id") != installation_id:
         raise PairingError("Owner database binding is missing or belongs to another installation")
@@ -66,11 +67,18 @@ async def begin_pairing(db, installation_id: str, bot_id: str, challenge: str) -
     if current and current.get("bot_id") != bot_id:
         raise PairingError("Configured Telegram bot differs from the recorded bot")
     now = datetime.now(timezone.utc)
+    pending = await db.telegram_pairings.find_one({"_id": bot_id})
+    if (pending and pending.get("status") in {"waiting", "candidate"}
+            and pending.get("expires_at")
+            and pending["expires_at"].replace(tzinfo=timezone.utc) > now
+            and pending.get("session_digest") != session_digest):
+        raise PairingError("Another pairing session is already in progress")
     await db.telegram_pairings.replace_one(
         {"_id": bot_id},
         {
             "_id": bot_id,
             "installation_id": installation_id,
+            "session_digest": session_digest,
             "challenge_hash": challenge_digest(challenge),
             "status": "waiting",
             "candidate": None,
@@ -263,17 +271,21 @@ async def pending_candidate(db, installation_id: str, bot_id: str) -> dict | Non
     return pairing["candidate"]
 
 
-async def confirm_candidate(db, installation_id: str, bot_id: str, sender_id: str) -> dict:
+async def confirm_candidate(db, installation_id: str, bot_id: str, sender_id: str,
+                            session_digest: str | None = None) -> dict:
     candidate = await pending_candidate(db, installation_id, bot_id)
     if not candidate or candidate["sender_id"] != sender_id:
         raise PairingError("No matching unexpired candidate to confirm")
     now = datetime.now(timezone.utc)
     async with db.client.start_session() as session:
         async with await session.start_transaction():
+            filter_ = {"_id": bot_id, "installation_id": installation_id,
+                       "status": "candidate", "candidate.sender_id": sender_id,
+                       "expires_at": {"$gt": now}}
+            if session_digest is not None:
+                filter_["session_digest"] = session_digest
             result = await db.telegram_pairings.update_one(
-                {"_id": bot_id, "installation_id": installation_id,
-                 "status": "candidate", "candidate.sender_id": sender_id,
-                 "expires_at": {"$gt": now}},
+                filter_,
                 {"$set": {"status": "confirmed", "confirmed_at": now},
                  "$unset": {"challenge_hash": ""}},
                 session=session,

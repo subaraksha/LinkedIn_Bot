@@ -6,6 +6,10 @@ import unittest
 from datetime import timedelta
 
 from app.config import get_settings
+from app.integrations.telegram_pairing import (
+    begin_pairing, claim_receiver, confirm_candidate, pending_candidate,
+    record_update, release_receiver,
+)
 from app.integrations.telegram_pairing import mongo_client
 from app.storage.foundation import FoundationError, ensure_foundation
 from app.storage.jobs import claim_job, enqueue_job, finish_job, utcnow
@@ -59,6 +63,30 @@ class FoundationIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 db, job_id=stale["_id"], worker_id="worker-a",
                 revision=stale["revision"], status="succeeded",
             ))
+
+            await begin_pairing(db, "test-installation", "999", "sample-challenge",
+                                session_digest="synthetic-session-digest")
+            lease = "test-lease"
+            await claim_receiver(db, "test-installation", "999", lease)
+            update = {"update_id": 1, "message": {
+                "message_id": 4, "text": "/start sample-challenge",
+                "from": {"id": 42, "is_bot": False, "first_name": "Owner"},
+                "chat": {"id": 42, "type": "private"},
+            }}
+            self.assertEqual(await record_update(
+                db, "test-installation", "999", lease, update
+            ), "pairing_candidate")
+            pairing = await db.telegram_pairings.find_one({"_id": "999"})
+            self.assertEqual(pairing["session_digest"], "synthetic-session-digest")
+            self.assertEqual((await pending_candidate(db, "test-installation", "999"))["sender_id"], "42")
+            from app.integrations.telegram_pairing import PairingError
+            with self.assertRaises(PairingError):
+                await confirm_candidate(db, "test-installation", "999", "42",
+                                        session_digest="wrong-session")
+            candidate = await confirm_candidate(db, "test-installation", "999", "42",
+                                                session_digest="synthetic-session-digest")
+            self.assertEqual(candidate["sender_id"], "42")
+            await release_receiver(db, "999", lease)
         finally:
             await client.drop_database(name)
             await client.close()
