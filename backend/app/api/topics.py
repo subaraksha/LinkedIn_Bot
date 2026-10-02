@@ -32,8 +32,13 @@ async def status(request: Request):
         workflow = await current_workflow(db, identity)
         issue_count = (await db.messages.count_documents({"kind": "phase3_topic",
             "workflow_id": workflow["_id"], "status": "send_unknown"}) if workflow else 0)
+        drafts = (await db.draft_versions.find({"workflow_id": workflow["_id"]},
+            {"_id": 1, "version": 1, "body": 1, "restored_from": 1,
+             "used_fact_ids": 1, "source_ids": 1, "created_at": 1}).sort(
+                "version", -1).limit(30).to_list(length=30) if workflow else [])
         return {"schedule": await get_schedule(db, identity, settings.app_timezone),
                 "workflow": workflow,
+                "drafts": drafts,
                 "telegram_delivery_uncertain": issue_count > 0}
 
 

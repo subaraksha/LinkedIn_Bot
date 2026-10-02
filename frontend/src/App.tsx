@@ -31,8 +31,9 @@ type Question = { id: string; kind: string; prompt: string; fact_id: string | nu
 type Topic = { title: string; why_now: string; why_you: string; angle: string; sources: { url: string; title: string }[] };
 type TopicStatus = { schedule: { enabled: boolean; weekday: number; local_time: string; timezone: string; next_at: string | null; revision: number };
   telegram_delivery_uncertain: boolean;
+  drafts: { _id: string; version: number; body: string; restored_from?: number; created_at: string }[];
   workflow: { state: string; shortlist_revision: number; shortlist: Topic[]; selected_topic: Topic | null;
-    perspective: string | null; experience: string; error?: string | null } | null };
+    perspective: string | null; experience: string; draft_error?: string | null; draft_version?: number; error?: string | null } | null };
 
 type Pairing = {
   status: string;
@@ -395,7 +396,7 @@ export default function App() {
         <section className="card">
           <p className="eyebrow">WEEKLY TOPICS</p>
           <h2>Find ideas to discuss</h2>
-          <p className="muted">Research uses the public feeds listed in <code>config/research-sources.json</code>. It does not draft or publish a post.</p>
+          <p className="muted">Research uses the public feeds listed in <code>config/research-sources.json</code>. You can then create and revise a draft through Telegram. Approval checks in this phase do not publish it.</p>
           {scheduleDraft && <form className="stack" onSubmit={(event) => void saveSchedule(event)}>
             <label className="checkbox"><input type="checkbox" checked={scheduleDraft.enabled}
               onChange={event => setScheduleDraft({ ...scheduleDraft, enabled: event.target.checked })} /> Send me a weekly invitation in Telegram</label>
@@ -414,6 +415,7 @@ export default function App() {
           {topicStatus?.workflow && <div className="record">
             <p><strong>Current conversation: {label(topicStatus.workflow.state)}</strong></p>
             {topicStatus.workflow.error && <p className="notice error">{topicStatus.workflow.error}</p>}
+            {topicStatus.workflow.draft_error && <p className="notice error">{topicStatus.workflow.draft_error}</p>}
             {topicStatus.workflow.selected_topic && <p>Selected: {topicStatus.workflow.selected_topic.title}</p>}
             {topicStatus.workflow.perspective && <p className="muted">Your perspective has been saved.</p>}
             {topicStatus.workflow.shortlist.map((topic, index) => <div className="record" key={`${topic.title}-${index}`}>
@@ -423,7 +425,15 @@ export default function App() {
               <p><strong>Possible angle:</strong> {topic.angle}</p>
               <p>Sources: {topic.sources.map((source, sourceIndex) => <span key={source.url}>{sourceIndex > 0 ? ", " : ""}<a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></span>)}</p>
             </div>)}
-            <p className="muted">Choose or reply in your paired Telegram chat. The bot will ask for your perspective before drafting begins.</p>
+            {topicStatus.drafts?.length > 0 && <div className="stack">
+              <h3>Draft history</h3>
+              <p className="muted">Earlier versions remain available. Reply RESTORE &lt;version&gt; in Telegram to copy one into a new version.</p>
+              {topicStatus.drafts.map(draft => <div className="record" key={draft._id}>
+                <p><strong>Version {draft.version}</strong>{draft.restored_from ? ` · restored from V${draft.restored_from}` : ""}</p>
+                <p style={{ whiteSpace: "pre-wrap" }}>{draft.body}</p>
+              </div>)}
+            </div>}
+            <p className="muted">Continue in your paired Telegram chat. After selecting a topic, reply DRAFT. Send feedback in ordinary words, then reply FINAL for the exact preview. No post is published in Phase 4.</p>
           </div>}
           <button className="secondary" disabled={busy} onClick={() => void loadTopics()}>Refresh topics</button>
         </section>

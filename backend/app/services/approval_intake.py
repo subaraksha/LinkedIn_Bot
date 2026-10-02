@@ -9,6 +9,7 @@ from app.domain.approval import PublicationEnvelope, parse_publish_command
 from app.domain.preview import PendingPreview, approve_preview
 from app.domain.telegram import InboundText, OwnerBinding
 from app.services.topic_workflow import handle_topic_message
+from app.services.draft_workflow import handle_draft_message, validate_phase4_command
 
 
 class ApprovalIntakeError(RuntimeError):
@@ -34,6 +35,9 @@ async def process_next_owner_message(db, installation_id: str, publishing_enable
         return None
     command = parse_publish_command(message["text"])
     if command is None:
+        draft_result = await handle_draft_message(db, message, installation_id)
+        if draft_result is not None:
+            return draft_result
         topic_result = await handle_topic_message(db, message, installation_id)
         if topic_result is not None:
             return topic_result
@@ -42,6 +46,9 @@ async def process_next_owner_message(db, installation_id: str, publishing_enable
             {"$set": {"status": "unhandled", "processed_at": datetime.now(timezone.utc)}},
         )
         return "unhandled"
+    phase4_result = await validate_phase4_command(db, message, installation_id)
+    if phase4_result is not None:
+        return phase4_result
     async with db.client.start_session() as session:
         async with await session.start_transaction():
             current = await db.messages.find_one(

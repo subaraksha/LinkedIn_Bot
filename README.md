@@ -93,4 +93,8 @@ The dashboard saves target roles, audience, interests, content goals, tone, leng
 
 ### Weekly topics (Phase 3)
 
-The dashboard can start topic research immediately or save an optional weekly Telegram invitation schedule. Invitations are off by default. The worker gathers bounded public-feed evidence, asks Gemini for four or five source-linked topic options, and lets the paired owner choose, request alternatives, provide an idea, or skip in Telegram. It then saves the owner's perspective and whether they have hands-on experience or are exploring the topic. This ends at `READY_FOR_DRAFT`; no Phase 3 action creates or publishes a LinkedIn post. See [Phase 3 status and commands](docs/phase-3-status.md) and edit [research sources](config/research-sources.json) to change the feeds.
+The dashboard can start topic research immediately or save an optional weekly Telegram invitation schedule. Invitations are off by default. The worker gathers bounded public-feed evidence, asks Gemini for four or five source-linked topic options, and lets the paired owner choose, request alternatives, provide an idea, or skip in Telegram. It then saves the owner's perspective and whether they have hands-on experience or are exploring the topic. Phase 3 ends at `READY_FOR_DRAFT`. See [Phase 3 status and commands](docs/phase-3-status.md) and edit [research sources](config/research-sources.json) to change the feeds.
+
+### Drafts and approval check (Phase 4)
+
+In Telegram, send `DRAFT` after selecting a topic, give feedback in ordinary words to create immutable new versions, use `RESTORE <version>` to copy an older version forward, and send `FINAL` for an exact three-part preview. The dashboard shows draft history. The preview command checks approval only: it records a `validated_only` receipt and never creates a LinkedIn publishing job. Phase 5 requires a fresh preview and approval. See [Phase 4 status and commands](docs/phase-4-status.md).

@@ -12,12 +12,17 @@ from app.services.topic_research import ResearchError, canonical_url, load_sourc
 from app.services.topic_workflow import (
     TopicWorkflowError, current_workflow, dispatch_topic_messages, format_shortlist,
     get_schedule, handle_topic_message, next_occurrence, save_schedule, start_workflow,
-    run_research_job, schedule_tick,
+    run_research_job, schedule_tick, parse_owner_topic,
 )
 from app.storage.foundation import ensure_foundation
 
 
 class TopicRulesTests(unittest.TestCase):
+    def test_owner_topic_accepts_no_space_and_preserves_short_idea_for_feedback(self):
+        self.assertEqual(parse_owner_topic("MY TOPIC:Jev"), "Jev")
+        self.assertEqual(parse_owner_topic("my topic: Java development"), "Java development")
+        self.assertIsNone(parse_owner_topic("TOPICS"))
+
     def test_sources_are_editable_and_canonical_links_stay_on_domain(self):
         self.assertGreaterEqual(len(load_sources()["feeds"]), 1)
         self.assertEqual(canonical_url("https://blog.python.org/post?a=1#fragment", "blog.python.org"),
@@ -70,7 +75,12 @@ class TopicWorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 "source_ids": [f"snapshot-{number}"], "sources": [{"id": f"snapshot-{number}",
                     "url": "https://blog.python.org/", "title": "Synthetic source"}]}
                 for number in range(4)]
-            async def synthetic_research(*_): return topics
+            async def synthetic_research(*_):
+                # A TOPICS reply while research runs changes the conversation revision.
+                # It must not discard the completed shortlist.
+                await db.workflows.update_one({"_id": workflow["_id"]},
+                    {"$inc": {"revision": 1}})
+                return topics
             with patch("app.services.topic_workflow.research_topics", synthetic_research):
                 self.assertTrue(await run_research_job(db, "synthetic-installation", "synthetic-key",
                                                        "synthetic-model", "worker-1"))

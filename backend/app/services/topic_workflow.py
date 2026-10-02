@@ -16,6 +16,11 @@ class TopicWorkflowError(ValueError):
     pass
 
 
+def parse_owner_topic(text: str) -> str | None:
+    match = re.fullmatch(r"MY TOPIC\s*:\s*(.*)", text.strip(), flags=re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -116,7 +121,7 @@ async def current_workflow(db, installation_id: str) -> dict | None:
         return None
     return {key: row.get(key) for key in ("_id", "short_code", "slot_key", "state", "revision",
             "shortlist_revision", "shortlist", "selected_topic", "perspective", "experience",
-            "error", "created_at", "updated_at", "invitation_sent_at")}
+            "error", "draft_error", "draft_version", "draft_id", "created_at", "updated_at", "invitation_sent_at")}
 
 
 async def schedule_tick(db, installation_id: str) -> None:
@@ -191,7 +196,8 @@ async def run_research_job(db, installation_id: str, api_key: str, model: str,
                     "started_at": started_at, "finished_at": now_utc(), "usage": usage}},
                     upsert=True, session=session)
                 result = await db.workflows.update_one({"_id": workflow["_id"],
-                    "revision": workflow["revision"], "state": "RESEARCH_PENDING"},
+                    "state": "RESEARCH_PENDING", "active": True,
+                    "shortlist_revision": workflow["shortlist_revision"]},
                     {"$set": {"state": "AWAITING_TOPIC", "shortlist": topics, "error": None,
                               "updated_at": now_utc()}, "$inc": {"revision": 1, "shortlist_revision": 1}},
                     session=session)
@@ -225,7 +231,8 @@ async def run_research_job(db, installation_id: str, api_key: str, model: str,
                     "started_at": started_at, "finished_at": now_utc(), "usage": usage}},
                     upsert=True, session=session)
                 result = await db.workflows.update_one({"_id": workflow["_id"],
-                    "revision": workflow["revision"], "state": "RESEARCH_PENDING"},
+                    "state": "RESEARCH_PENDING", "active": True,
+                    "shortlist_revision": workflow["shortlist_revision"]},
                     {"$set": {"state": "RESEARCH_FAILED", "error": str(exc),
                               "updated_at": now_utc()}, "$inc": {"revision": 1}}, session=session)
                 if result.modified_count:
@@ -310,10 +317,9 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
         updates["perspective"] = None
         updates["experience"] = "unconfirmed"
         reply = "I’ll look for a new set of sourced ideas. Reply TOPICS when they are ready."
-    elif upper.startswith("MY TOPIC: ") and state in {"AWAITING_TOPIC", "RESEARCH_FAILED", "RESEARCH_PENDING"}:
-        idea = text[len("MY TOPIC: "):].strip()
+    elif (idea := parse_owner_topic(text)) is not None and state in {"AWAITING_TOPIC", "RESEARCH_FAILED", "RESEARCH_PENDING"}:
         if not 5 <= len(idea) <= 300:
-            reply = "Please send MY TOPIC: followed by an idea of 5 to 300 characters."
+            reply = "Please send MY TOPIC: followed by an idea of 5 to 300 characters (for example, MY TOPIC: Java development)."
         else:
             updates["selected_topic"] = {"title": idea, "owner_proposed": True,
                                            "sources": [], "angle": "Owner supplied topic"}
@@ -340,7 +346,7 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
             reply = "What is your view on this topic? Share a practical observation, concern, or example. You can also reply SKIP INPUT."
     elif state == "AWAITING_INPUT" and upper in {"SKIP INPUT", "DRAFT"}:
         next_state = "READY_FOR_DRAFT"
-        reply = "Saved. Your topic is ready for drafting; no post has been created or published."
+        reply = "Saved. Reply DRAFT to create the first draft. No post has been created or published yet."
     elif state == "AWAITING_INPUT" and workflow.get("input_step") == "perspective":
         if not 1 <= len(text) <= 2000:
             reply = "Please send up to 2,000 characters, or reply SKIP INPUT."
@@ -352,7 +358,7 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
         if upper in {"HANDS ON", "EXPLORING"}:
             updates["experience"] = "hands_on" if upper == "HANDS ON" else "exploring"
             next_state = "READY_FOR_DRAFT"
-            reply = "Saved. Your topic and perspective are ready for drafting; no post has been created or published."
+            reply = "Saved. Reply DRAFT to create the first draft from your topic and perspective. Nothing has been published."
         else:
             reply = "Please reply HANDS ON, EXPLORING, or SKIP INPUT."
     elif state == "RESEARCH_PENDING":

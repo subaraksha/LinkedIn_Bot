@@ -11,6 +11,7 @@ from app.integrations.telegram_pairing import (
     record_owner_update, release_receiver,
 )
 from app.services.approval_intake import drain_owner_messages
+from app.services.draft_workflow import dispatch_draft_previews, run_draft_job
 from app.services.topic_workflow import (
     dispatch_topic_messages, reminder_tick, run_research_job, schedule_tick,
 )
@@ -33,6 +34,7 @@ async def receive() -> None:
     lease_token = secrets.token_urlsafe(24)
     bot_id = None
     research_task = None
+    draft_task = None
     try:
         identity = await telegram.identity()
         bot_id = identity["id"]
@@ -60,10 +62,20 @@ async def receive() -> None:
                 except Exception:
                     print("Topic research needs attention; the job can be retried after its lease expires", flush=True)
                 research_task = None
+            if draft_task and draft_task.done():
+                try:
+                    draft_task.result()
+                except Exception:
+                    print("Draft generation needs attention", flush=True)
+                draft_task = None
             await schedule_tick(db, installation_id)
             await reminder_tick(db, installation_id)
             if research_task is None and settings.gemini_api_key and settings.gemini_model:
                 research_task = asyncio.create_task(run_research_job(
+                    db, installation_id, settings.gemini_api_key, settings.gemini_model,
+                    lease_token))
+            if draft_task is None and settings.gemini_api_key and settings.gemini_model:
+                draft_task = asyncio.create_task(run_draft_job(
                     db, installation_id, settings.gemini_api_key, settings.gemini_model,
                     lease_token))
             offset = await claim_receiver(db, installation_id, bot_id, lease_token, lease_seconds=90)
@@ -94,11 +106,18 @@ async def receive() -> None:
             await publish_one(db, settings, installation_id, bot_id, lease_token)
             await dispatch_publication_notice(db, telegram, bot_id)
             await dispatch_topic_messages(db, telegram, installation_id)
+            await dispatch_draft_previews(db, telegram, installation_id)
     finally:
         if research_task and not research_task.done():
             research_task.cancel()
             try:
                 await research_task
+            except asyncio.CancelledError:
+                pass
+        if draft_task and not draft_task.done():
+            draft_task.cancel()
+            try:
+                await draft_task
             except asyncio.CancelledError:
                 pass
         if bot_id:

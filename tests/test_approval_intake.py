@@ -122,10 +122,45 @@ def fixture_db(receiver_epoch=3):
     }])
     db.approval_receipts = FakeCollection()
     db.jobs = FakeCollection()
+    db.owner_settings = FakeCollection([{"_id": "owner", "installation_id": "install",
+                                         "profile_revision": 1}])
     return db
 
 
 class ApprovalIntakeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_phase4_command_validates_without_publish_job(self):
+        db = fixture_db()
+        workflow = db.workflows.documents["workflow"]
+        workflow.update({"kind": "weekly_topics", "installation_id": "install",
+                         "preview_id": "preview-1", "preview_issued_after_seq": 0,
+                         "linkedin_connection_revision": 0, "preview_profile_revision": 1})
+        db.draft_versions.documents["draft"]["version"] = 1
+        for part in db.messages.documents.values():
+            if part.get("direction") == "outbound":
+                part.update({"kind": "phase4_preview", "preview_id": "preview-1"})
+        self.assertEqual(await process_next_owner_message(db, "install", False),
+                         "phase4_approval_verified")
+        self.assertEqual(workflow["state"], "APPROVAL_VERIFIED")
+        self.assertEqual(next(iter(db.approval_receipts.documents.values()))["status"],
+                         "validated_only")
+        self.assertFalse(db.jobs.documents)
+
+    async def test_phase4_changed_body_rejects_approval(self):
+        db = fixture_db()
+        workflow = db.workflows.documents["workflow"]
+        workflow.update({"kind": "weekly_topics", "installation_id": "install",
+                         "preview_id": "preview-1", "preview_issued_after_seq": 0,
+                         "linkedin_connection_revision": 0, "preview_profile_revision": 1})
+        db.draft_versions.documents["draft"]["version"] = 1
+        for part in db.messages.documents.values():
+            if part.get("direction") == "outbound":
+                part.update({"kind": "phase4_preview", "preview_id": "preview-1"})
+        db.messages.documents["body"]["text"] = "Changed draft"
+        self.assertEqual(await process_next_owner_message(db, "install", False),
+                         "phase4_approval_rejected")
+        self.assertFalse(db.approval_receipts.documents)
+        self.assertFalse(db.jobs.documents)
+
     async def test_exact_command_creates_one_receipt_and_one_job(self):
         db = fixture_db()
         self.assertEqual(await process_next_owner_message(db, "install", True), "approval_accepted")
