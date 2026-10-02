@@ -66,3 +66,13 @@ Run `uv run linkedin-agent-preview-demo` to send one explicitly labeled dry-run 
 For a live phase 0 post, save the exact UTF-8 body in a local ignored file. Set `PUBLISHING_ENABLED=true`, start the paired worker, then run `uv run linkedin-agent-final-preview --live <post-file>`. This sends an account and public audience notice, the exact body, and a one-use command to Telegram. Only the paired owner can send that command from the private chat. The command approves immediate public publication; an unapproved preview never reaches LinkedIn. Check the exact account and body in Telegram before sending it. If LinkedIn's result is uncertain, inspect the profile before any fresh preview.
 
 Run the Phase 0 checks locally with `uv run python -m unittest discover -s tests -q` and `npm run build --prefix frontend`. The full V1 authoring and recovery workflow is still being built; the live-preview command above is a narrow validation tool.
+
+### Professional information intake (Phase 2, first slice)
+
+The local dashboard now accepts manually entered facts and pasted LinkedIn profile text. Pasted text is stored as a private source only; it is not automatically extracted into facts. A manually entered fact is marked confirmed because the owner supplied it, but defaults to **private** publication permission. Each fact retains a source reference and can be edited, disputed or confirmed, made public or private, and deleted from active knowledge. Editing records a new owner-statement source for the revised wording. These changes invalidate any waiting publication approval and pending publish job, requiring a new preview.
+
+The app saves these records in the bound MongoDB database. Profile revision increments with each accepted change, ready for the portable export planned later in Phase 2. Resume upload, GitHub intake, automatic extraction, clarification, and export are subsequent slices. Use synthetic data for testing; the opt-in integration test creates and drops a uniquely named temporary database on the configured cluster.
+
+### Fact suggestions from saved text
+
+For a saved LinkedIn text source, choose **Suggest facts from this text**. The local backend sends that source text to the configured Gemini model, accepts only structured suggestions with a verbatim quote found in the source, and saves them as `pending_confirmation` and `private`. The dashboard shows the supporting quote and lets the owner confirm, edit, dispute, change publication permission, or delete each suggestion. Repeating the action on a completed source does not create duplicates. The model is never called just by saving a source. A confirmation does not publish a post.

@@ -23,3 +23,12 @@ button:hover { background: #125a7a; }
 button:disabled { opacity: .55; cursor: not-allowed; }
 button.secondary { background: #e6f1f6; color: #175674; }
 a { color: #176e94; font-weight: 650; }
+.stack { display: grid; gap: 12px; padding: 18px 0; border-top: 1px solid #e5edf1; }
+.stack h3 { margin: 0; }
+.stack label { display: grid; gap: 6px; font-weight: 600; }
+.stack input, .stack textarea, .stack select { width: 100%; border: 1px solid #bfd0dc; border-radius: 8px; padding: 10px 12px; font: inherit; color: inherit; background: #fff; }
+.stack button { justify-self: start; }
+.record { border-top: 1px solid #e5edf1; padding: 14px 0; overflow-wrap: anywhere; }
+.record p { margin: 7px 0; white-space: pre-wrap; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.evidence { background: #f2f7fa; border-left: 3px solid #7ca9bf; padding: 10px 12px; border-radius: 4px; }

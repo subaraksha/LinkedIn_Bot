@@ -12,6 +12,10 @@ type Readiness = {
   telegram_account: { bot_id_suffix: string; owner_id_suffix: string } | null;
 };
 
+type Source = { _id: string; kind: string; label: string; content: string; extraction_status?: string; created_at: string };
+type Fact = { _id: string; type: string; claim: string; experience_context: string; status: string; publication_permission: string; evidence: { source_id: string; kind: string; quote?: string }[]; revision: number };
+type Knowledge = { profile_revision: number; sources: Source[]; facts: Fact[] };
+
 type Pairing = {
   status: string;
   candidate?: { sender_id: string; first_name?: string; username?: string } | null;
@@ -28,12 +32,25 @@ export default function App() {
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [pairingUrl, setPairingUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [knowledge, setKnowledge] = useState<Knowledge | null>(null);
+  const [sourceLabel, setSourceLabel] = useState("LinkedIn profile text");
+  const [sourceText, setSourceText] = useState("");
+  const [factType, setFactType] = useState("work");
+  const [factClaim, setFactClaim] = useState("");
+  const [factContext, setFactContext] = useState("");
+  const [factPermission, setFactPermission] = useState("private");
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const response = await fetch("/api/readiness", { credentials: "same-origin" });
     if (!response.ok) throw new Error("Could not load setup status");
     setReadiness((await response.json()) as Readiness);
+  }, []);
+
+  const loadKnowledge = useCallback(async () => {
+    const response = await fetch("/api/v1/knowledge", { credentials: "same-origin" });
+    if (!response.ok) throw new Error("Could not load professional information");
+    setKnowledge((await response.json()) as Knowledge);
   }, []);
 
   const loadPairing = useCallback(async () => {
@@ -49,10 +66,10 @@ export default function App() {
       })
       .then(({ csrf: value }) => {
         setCsrf(value);
-        return Promise.all([load(), loadPairing()]);
+        return Promise.all([load(), loadPairing(), loadKnowledge()]);
       })
       .catch((cause: Error) => setError(cause.message));
-  }, [load, loadPairing]);
+  }, [load, loadPairing, loadKnowledge]);
 
   useEffect(() => {
     if (pairing?.status !== "waiting" || !csrf) return;
@@ -72,6 +89,60 @@ export default function App() {
       throw new Error(payload.detail || "Setup action failed");
     }
     return response.json();
+  }
+
+  async function mutate(path: string, method: string, body: object) {
+    if (!csrf) throw new Error("Local session is unavailable");
+    const response = await fetch(path, {
+      method, credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { detail?: string };
+      throw new Error(payload.detail || "Could not save professional information");
+    }
+    return response.json();
+  }
+
+  async function saveSource(event: React.FormEvent) {
+    event.preventDefault(); setBusy(true); setError(null);
+    try {
+      await mutate("/api/v1/sources/text", "POST", { label: sourceLabel, content: sourceText });
+      setSourceText(""); await loadKnowledge();
+    } catch (cause) { setError((cause as Error).message); } finally { setBusy(false); }
+  }
+
+  async function extractSource(source: Source) {
+    setBusy(true); setError(null);
+    try { await mutate(`/api/v1/sources/${source._id}/suggestions`, "POST", {}); await loadKnowledge(); }
+    catch (cause) { setError((cause as Error).message); } finally { setBusy(false); }
+  }
+
+  async function saveFact(event: React.FormEvent) {
+    event.preventDefault(); setBusy(true); setError(null);
+    try {
+      await mutate("/api/v1/knowledge", "POST", { type: factType, claim: factClaim, experience_context: factContext, publication_permission: factPermission });
+      setFactClaim(""); setFactContext(""); setFactPermission("private"); await loadKnowledge();
+    } catch (cause) { setError((cause as Error).message); } finally { setBusy(false); }
+  }
+
+  async function changeFact(fact: Fact, action: "edit" | "toggle" | "review" | "delete") {
+    let body: object; let method = "PATCH";
+    if (action === "delete") {
+      if (!window.confirm("Delete this fact from active knowledge?")) return;
+      body = { expected_revision: fact.revision }; method = "DELETE";
+    } else {
+      const claim = action === "edit" ? window.prompt("Edit this fact", fact.claim) : fact.claim;
+      if (claim === null || !claim.trim()) return;
+      body = { expected_revision: fact.revision, claim, experience_context: fact.experience_context,
+        publication_permission: action === "toggle" ? (fact.publication_permission === "private" ? "public" : "private") : fact.publication_permission,
+        status: action === "review" ? (fact.status === "confirmed" ? "disputed" : "confirmed") : fact.status };
+    }
+    setBusy(true); setError(null);
+    try { await mutate(`/api/v1/knowledge/${fact._id}`, method, body); await loadKnowledge(); }
+    catch (cause) { setError((cause as Error).message); await loadKnowledge(); }
+    finally { setBusy(false); }
   }
 
   async function startTelegram() {
@@ -153,6 +224,44 @@ export default function App() {
             {readiness.linkedin === "connected" ? "Reconnect LinkedIn" : "Connect LinkedIn"}
           </button>
           <p className="muted">Connecting an account does not publish a post.</p>
+        </section>
+        <section className="card">
+          <p className="eyebrow">PROFESSIONAL INFORMATION</p>
+          <h2>Your sources and facts</h2>
+          <p className="muted">Saved locally in your database. New facts are private by default. Pasted profile text stays a source until you ask for suggestions. That sends the saved text to Gemini and creates private facts for your review; nothing is published.</p>
+          <form onSubmit={(event) => void saveSource(event)} className="stack">
+            <h3>Save LinkedIn profile text</h3>
+            <label>Source label<input value={sourceLabel} maxLength={120} onChange={event => setSourceLabel(event.target.value)} required /></label>
+            <label>Profile text<textarea value={sourceText} maxLength={50000} rows={6} onChange={event => setSourceText(event.target.value)} required /></label>
+            <button disabled={busy || !csrf}>Save source</button>
+          </form>
+          <form onSubmit={(event) => void saveFact(event)} className="stack">
+            <h3>Add a fact</h3>
+            <label>Type<select value={factType} onChange={event => setFactType(event.target.value)}>{["work", "education", "project", "tool", "achievement", "other"].map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label>
+            <label>Fact<textarea value={factClaim} maxLength={2000} rows={3} onChange={event => setFactClaim(event.target.value)} required /></label>
+            <label>Context, optional<input value={factContext} maxLength={2000} onChange={event => setFactContext(event.target.value)} /></label>
+            <label>Can this be used in public posts?<select value={factPermission} onChange={event => setFactPermission(event.target.value)}><option value="private">Private</option><option value="public">Public</option></select></label>
+            <button disabled={busy || !csrf}>Save fact</button>
+          </form>
+          {knowledge && <>
+            <h3>Sources ({knowledge.sources.length})</h3>
+            {knowledge.sources.length === 0 && <p className="muted">No sources saved yet.</p>}
+            {knowledge.sources.map(source => <article className="record" key={source._id}>
+              <strong>{source.label}</strong> <span className="muted">· {label(source.kind)}</span>
+              <p>{source.content.length > 240 ? `${source.content.slice(0, 240)}…` : source.content}</p>
+              {source.kind === "linkedin_profile_text" && <p className="muted">Suggestions: {label(source.extraction_status || "not_started")}</p>}
+              {source.kind === "linkedin_profile_text" && source.extraction_status !== "completed" && <button className="secondary" disabled={busy} onClick={() => void extractSource(source)}>Suggest facts from this text</button>}
+            </article>)}
+            <h3>Facts ({knowledge.facts.length})</h3>
+            {knowledge.facts.length === 0 && <p className="muted">No facts saved yet.</p>}
+            {knowledge.facts.map(fact => <article className="record" key={fact._id}>
+              <p>{fact.claim}</p>
+              {fact.experience_context && <p className="muted">{fact.experience_context}</p>}
+              <p className="muted">{label(fact.type)} · {label(fact.status)} · {label(fact.publication_permission)} · Source: {knowledge.sources.find(source => source._id === fact.evidence[0]?.source_id)?.label || "Owner statement"}</p>
+              {fact.evidence[0]?.quote && <p className="evidence">From your source: “{fact.evidence[0].quote}”</p>}
+              <div className="actions"><button className="secondary" disabled={busy} onClick={() => void changeFact(fact, "edit")}>Edit</button><button className="secondary" disabled={busy} onClick={() => void changeFact(fact, "toggle")}>Set {fact.publication_permission === "private" ? "public" : "private"}</button><button className="secondary" disabled={busy} onClick={() => void changeFact(fact, "review")}>Mark {fact.status === "confirmed" ? "disputed" : "confirmed"}</button><button className="secondary" disabled={busy} onClick={() => void changeFact(fact, "delete")}>Delete</button></div>
+            </article>)}
+          </>}
         </section>
       </>}
     </main>
