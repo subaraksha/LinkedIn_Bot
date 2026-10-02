@@ -31,9 +31,16 @@ type Question = { id: string; kind: string; prompt: string; fact_id: string | nu
 type Topic = { title: string; why_now: string; why_you: string; angle: string; sources: { url: string; title: string }[] };
 type TopicStatus = { schedule: { enabled: boolean; weekday: number; local_time: string; timezone: string; next_at: string | null; revision: number };
   telegram_delivery_uncertain: boolean;
+  publishing_enabled: boolean;
   drafts: { _id: string; version: number; body: string; restored_from?: number; created_at: string }[];
-  workflow: { state: string; shortlist_revision: number; shortlist: Topic[]; selected_topic: Topic | null;
-    perspective: string | null; experience: string; draft_error?: string | null; draft_version?: number; error?: string | null } | null };
+  recent_outcomes: { _id: string; state: string; selected_topic?: { title: string };
+    post_url?: string | null; post_evidence_source?: string | null }[];
+  recovery: { attempt_id: string; workflow_revision: number; result_reason?: string;
+    quiesced: boolean; error?: string } | null;
+  workflow: { _id: string; state: string; shortlist_revision: number; shortlist: Topic[]; selected_topic: Topic | null;
+    perspective: string | null; experience: string; draft_error?: string | null;
+    publication_error?: string | null; post_url?: string | null;
+    draft_version?: number; error?: string | null } | null };
 
 type Pairing = {
   status: string;
@@ -62,6 +69,8 @@ export default function App() {
   const [topicStatus, setTopicStatus] = useState<TopicStatus | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<TopicStatus["schedule"] | null>(null);
   const [topicNotice, setTopicNotice] = useState<string | null>(null);
+  const [recoveryAcknowledged, setRecoveryAcknowledged] = useState(false);
+  const [recoveryPostUrl, setRecoveryPostUrl] = useState("");
   const [sourceLabel, setSourceLabel] = useState("LinkedIn profile text");
   const [sourceText, setSourceText] = useState("");
   const [resumeFile, setResumeFile] = useState<File | null>(null);
@@ -341,6 +350,39 @@ export default function App() {
     finally { setBusy(false); }
   }
 
+  async function quiescePublisher() {
+    const workflow = topicStatus?.workflow;
+    if (!workflow) return;
+    setBusy(true); setError(null); setTopicNotice(null);
+    try {
+      await post(`/api/v1/publications/${workflow._id}/quiesce`);
+      await loadTopics(); await load();
+      setTopicNotice("The old publisher has stopped. Review your LinkedIn profile before resolving the outcome.");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function resolvePublication(outcome: "published" | "not_published") {
+    const workflow = topicStatus?.workflow;
+    const recovery = topicStatus?.recovery;
+    if (!workflow || !recovery || !recoveryAcknowledged) return;
+    setBusy(true); setError(null); setTopicNotice(null);
+    try {
+      await post(`/api/v1/publications/${workflow._id}/resolve`, {
+        attempt_id: recovery.attempt_id,
+        expected_workflow_revision: recovery.workflow_revision,
+        idempotency_key: crypto.randomUUID(), outcome,
+        acknowledgement: true,
+        post_url: outcome === "published" ? recoveryPostUrl.trim() : null,
+      });
+      setRecoveryAcknowledged(false); setRecoveryPostUrl("");
+      await loadTopics();
+      setTopicNotice(outcome === "published" ? "Published outcome recorded." :
+        "Marked not published. Restart the local Telegram worker, then request a new FINAL preview and approval before another send.");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
   return (
     <main>
       <header>
@@ -416,6 +458,7 @@ export default function App() {
             <p><strong>Current conversation: {label(topicStatus.workflow.state)}</strong></p>
             {topicStatus.workflow.error && <p className="notice error">{topicStatus.workflow.error}</p>}
             {topicStatus.workflow.draft_error && <p className="notice error">{topicStatus.workflow.draft_error}</p>}
+            {topicStatus.workflow.publication_error && <p className="notice error">Publishing stopped before sending: {topicStatus.workflow.publication_error}. Request a new FINAL preview after fixing the issue.</p>}
             {topicStatus.workflow.selected_topic && <p>Selected: {topicStatus.workflow.selected_topic.title}</p>}
             {topicStatus.workflow.perspective && <p className="muted">Your perspective has been saved.</p>}
             {topicStatus.workflow.shortlist.map((topic, index) => <div className="record" key={`${topic.title}-${index}`}>
@@ -433,7 +476,29 @@ export default function App() {
                 <p style={{ whiteSpace: "pre-wrap" }}>{draft.body}</p>
               </div>)}
             </div>}
-            <p className="muted">Continue in your paired Telegram chat. After selecting a topic, reply DRAFT. Send feedback in ordinary words, then reply FINAL for the exact preview. No post is published in Phase 4.</p>
+            {topicStatus.workflow.state === "PUBLISH_UNKNOWN" && <div className="record">
+              <h3>Publication outcome uncertain</h3>
+              <p>LinkedIn may have created the post. Please check your LinkedIn profile. The app will not automatically send it again.</p>
+              {topicStatus.recovery?.error && <p className="notice error">{topicStatus.recovery.error}</p>}
+              {topicStatus.recovery && !topicStatus.recovery.quiesced && <button disabled={busy} onClick={() => void quiescePublisher()}>Stop old publisher for recovery</button>}
+              {topicStatus.recovery?.quiesced && <div className="stack">
+                <p>The old publisher has stopped. Choose the outcome after checking LinkedIn.</p>
+                <label>Post URL, if you found the post<input value={recoveryPostUrl} onChange={event => setRecoveryPostUrl(event.target.value)} placeholder="https://www.linkedin.com/feed/update/urn:li:share:..." /></label>
+                <label className="checkbox"><input type="checkbox" checked={recoveryAcknowledged} onChange={event => setRecoveryAcknowledged(event.target.checked)} /> I inspected LinkedIn. I understand that a missing post cannot be proved with certainty.</label>
+                <div className="form-grid">
+                  <button disabled={busy || !recoveryAcknowledged || !recoveryPostUrl.trim()} onClick={() => void resolvePublication("published")}>Record as published</button>
+                  <button className="secondary" disabled={busy || !recoveryAcknowledged || !!recoveryPostUrl.trim()} onClick={() => void resolvePublication("not_published")}>Record as not published</button>
+                </div>
+              </div>}
+            </div>}
+            <p className="muted">Continue in your paired Telegram chat. After selecting a topic, reply DRAFT. Send feedback in ordinary words, then reply FINAL for the exact preview. {topicStatus.publishing_enabled ? "A new exact Telegram approval can publish the post." : "Live publishing is currently disabled; approvals are checks only."}</p>
+          </div>}
+          {topicStatus && topicStatus.recent_outcomes.length > 0 && <div className="record">
+            <h3>Recent outcomes</h3>
+            {topicStatus.recent_outcomes.map(item => <p key={item._id}>
+              <strong>{label(item.state)}</strong> · {item.selected_topic?.title || "Post"}
+              {item.post_url && <> · <a href={item.post_url} target="_blank" rel="noreferrer">View LinkedIn post</a>{item.post_evidence_source === "owner_reported" ? " (reported by you)" : ""}</>}
+            </p>)}
           </div>}
           <button className="secondary" disabled={busy} onClick={() => void loadTopics()}>Refresh topics</button>
         </section>

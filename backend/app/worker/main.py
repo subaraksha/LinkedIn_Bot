@@ -1,6 +1,8 @@
 import asyncio
+import os
 import secrets
 
+import psutil
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.config import get_settings
@@ -16,7 +18,8 @@ from app.services.topic_workflow import (
     dispatch_topic_messages, reminder_tick, run_research_job, schedule_tick,
 )
 from app.services.publication import (
-    PublicationError, dispatch_publication_notice, publish_one, recover_inflight,
+    PublicationError, block_pending_publication, dispatch_publication_notice,
+    publish_one, recover_inflight,
 )
 from app.storage.installation import InstallationError, installation_identity
 from app.storage.process_lock import WorkerAlreadyRunning, WorkerLock
@@ -46,6 +49,9 @@ async def receive() -> None:
                 or connection.get("bot_id") != bot_id or connection.get("status") != "connected"):
             raise PairingError("Telegram bot is not paired to this installation")
         await claim_receiver(db, installation_id, bot_id, lease_token, lease_seconds=90)
+        await db.telegram_receivers.update_one({"_id": bot_id, "installation_id": installation_id,
+            "lease_token": lease_token}, {"$set": {"worker_pid": os.getpid(),
+            "worker_created_at": psutil.Process(os.getpid()).create_time()}})
         await mark_receiver_restart(db, installation_id, bot_id)
         await recover_inflight(db, settings.app_data_dir)
         await drain_owner_messages(db, installation_id, publishing_enabled=False)
@@ -103,7 +109,11 @@ async def receive() -> None:
                     db, installation_id, publishing_enabled=settings.publishing_enabled
                 )
                 print(f"Saved {counts['owner_input']} owner message(s); rejected {counts['rejected']} update(s)", flush=True)
-            await publish_one(db, settings, installation_id, bot_id, lease_token)
+            try:
+                await publish_one(db, settings, installation_id, bot_id, lease_token)
+            except PublicationError as exc:
+                if not await block_pending_publication(db, installation_id, str(exc)):
+                    raise
             await dispatch_publication_notice(db, telegram, bot_id)
             await dispatch_topic_messages(db, telegram, installation_id)
             await dispatch_draft_previews(db, telegram, installation_id)

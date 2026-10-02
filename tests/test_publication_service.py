@@ -8,7 +8,10 @@ from unittest.mock import patch
 
 from app.domain.approval import PublicationEnvelope
 from app.integrations.linkedin_posts import PostResult
-from app.services.publication import PublicationError, _preflight, publish_one, recover_inflight
+from app.services.publication import (
+    PublicationError, _preflight, block_pending_publication, publish_one,
+    recover_inflight,
+)
 from app.storage.publication_journal import save_success
 
 
@@ -50,7 +53,7 @@ class Collection:
 
     def find(self, query):
         documents = [copy.deepcopy(doc) for doc in self.documents.values() if matches(doc, query)]
-        return SimpleNamespace(to_list=lambda length: _list_first(documents, length))
+        return Cursor(documents)
 
     async def insert_one(self, document, **_kwargs):
         if document["_id"] in self.documents:
@@ -74,6 +77,18 @@ class Collection:
 
 async def _list_first(documents, length):
     return documents[:length]
+
+
+class Cursor:
+    def __init__(self, documents):
+        self.documents = documents
+
+    def sort(self, field, direction):
+        self.documents.sort(key=lambda doc: doc.get(field, 0), reverse=direction < 0)
+        return self
+
+    async def to_list(self, length):
+        return self.documents[:length]
 
 
 def fixture():
@@ -121,6 +136,46 @@ def fixture():
 
 
 class PublicationServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_preflight_failure_retires_unsent_approval(self):
+        db = fixture()
+        self.assertTrue(await block_pending_publication(db, "install", "credential unavailable"))
+        self.assertEqual(db.workflows.documents["workflow"]["state"], "AWAITING_REVIEW")
+        self.assertEqual(db.jobs.documents["publish:approval:workflow"]["status"], "blocked")
+        self.assertEqual(db.approval_receipts.documents["approval:workflow"]["status"],
+                         "invalidated_before_send")
+        self.assertEqual(len(db.messages.documents), 1)
+
+    async def test_weekly_approved_version_publishes_exact_body_once(self):
+        db = fixture()
+        workflow = db.workflows.documents["workflow"]
+        workflow.update({"kind": "weekly_topics", "installation_id": "install",
+                         "draft_id": "draft", "draft_version": 1,
+                         "preview_id": "preview-1", "preview_profile_revision": 1,
+                         "pending_preview": {**workflow["pending_preview"], "mode": "publish"}})
+        db.owner_settings.documents["owner"]["profile_revision"] = 1
+        receipt = db.approval_receipts.documents["approval:workflow"]
+        receipt.update({"draft_id": "draft", "draft_version": 1})
+        db.draft_versions = Collection([{"_id": "draft", "workflow_id": "workflow",
+            "version": 1, "body": "An approved test post", "profile_revision": 1}])
+        for index, body in enumerate(("LinkedIn account: member", "An approved test post",
+                                      "PUBLISH W1 V1 CODE")):
+            db.messages.documents[f"part:{index}"] = {"_id": f"part:{index}",
+                "kind": "phase4_preview", "preview_id": "preview-1", "part_index": index,
+                "status": "accepted", "text": body}
+        sent = []
+        async def fake_sender(token, version, envelope):
+            sent.append(envelope.text)
+            return PostResult("confirmed", 201, "urn:li:share:123", "created")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "app.services.publication.keyring.get_password", return_value="fake-token"
+        ):
+            settings = SimpleNamespace(publishing_enabled=True, linkedin_api_version="202609",
+                                       app_data_dir=Path(directory))
+            self.assertEqual(await publish_one(db, settings, "install", "bot", "lease",
+                                               post_sender=fake_sender), "confirmed")
+        self.assertEqual(sent, ["An approved test post"])
+        self.assertEqual(workflow["state"], "PUBLISHED")
+
     async def test_publication_preflight_blocks_saved_boundary(self):
         from app.domain.owner_profile import OwnerProfileInput
         db = fixture()

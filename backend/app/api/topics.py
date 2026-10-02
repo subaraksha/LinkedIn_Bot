@@ -11,6 +11,7 @@ from app.api.security import require_session
 from app.services.topic_workflow import (
     TopicWorkflowError, current_workflow, get_schedule, save_schedule, start_workflow,
 )
+from app.services.publication_recovery import RecoveryError, recovery_status
 
 
 router = APIRouter(prefix="/api/v1/topics")
@@ -36,9 +37,23 @@ async def status(request: Request):
             {"_id": 1, "version": 1, "body": 1, "restored_from": 1,
              "used_fact_ids": 1, "source_ids": 1, "created_at": 1}).sort(
                 "version", -1).limit(30).to_list(length=30) if workflow else [])
+        history = await db.workflows.find({"installation_id": identity, "active": False,
+            "state": {"$in": ["PUBLISHED", "DISCARDED", "SKIPPED"]}},
+            {"_id": 1, "state": 1, "selected_topic.title": 1, "post_url": 1,
+             "post_evidence_source": 1, "updated_at": 1}).sort(
+                "updated_at", -1).limit(20).to_list(length=20)
+        recovery = None
+        if workflow and workflow["state"] == "PUBLISH_UNKNOWN":
+            try:
+                recovery = await recovery_status(db, workflow["_id"])
+            except RecoveryError:
+                recovery = {"error": "Recovery evidence is unavailable"}
         return {"schedule": await get_schedule(db, identity, settings.app_timezone),
                 "workflow": workflow,
                 "drafts": drafts,
+                "recent_outcomes": history,
+                "recovery": recovery,
+                "publishing_enabled": settings.publishing_enabled,
                 "telegram_delivery_uncertain": issue_count > 0}
 
 

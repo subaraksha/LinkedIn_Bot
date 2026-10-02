@@ -121,7 +121,8 @@ async def current_workflow(db, installation_id: str) -> dict | None:
         return None
     return {key: row.get(key) for key in ("_id", "short_code", "slot_key", "state", "revision",
             "shortlist_revision", "shortlist", "selected_topic", "perspective", "experience",
-            "error", "draft_error", "draft_version", "draft_id", "created_at", "updated_at", "invitation_sent_at")}
+            "error", "draft_error", "publication_error", "post_url", "draft_version",
+            "draft_id", "created_at", "updated_at", "invitation_sent_at")}
 
 
 async def schedule_tick(db, installation_id: str) -> None:

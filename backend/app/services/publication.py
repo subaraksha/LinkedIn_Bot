@@ -1,8 +1,10 @@
 """Guarded, one-shot publication of a durably approved envelope."""
 
+import os
 from datetime import datetime, timezone
 
 import keyring
+import psutil
 from keyring.errors import KeyringError
 from pymongo.errors import PyMongoError
 
@@ -66,9 +68,29 @@ async def _preflight(db, installation_id: str, bot_id: str, lease_token: str, jo
             or envelope.digest() != workflow.get("envelope_hash")
             or envelope.author_urn != f"urn:li:person:{linkedin['member_id']}"):
         raise PublicationError("Approved envelope no longer matches the destination")
+    if workflow.get("kind") == "weekly_topics":
+        draft = await db.draft_versions.find_one({"_id": workflow.get("draft_id")})
+        owner = await db.owner_settings.find_one({"_id": "owner", "installation_id": installation_id})
+        parts = await db.messages.find({"kind": "phase4_preview",
+            "preview_id": workflow.get("preview_id")}).sort("part_index", 1).to_list(length=4)
+        if (workflow.get("pending_preview", {}).get("mode") != "publish"
+                or not draft or not owner
+                or owner.get("profile_revision") != workflow.get("preview_profile_revision")
+                or draft.get("profile_revision") != owner.get("profile_revision")
+                or draft.get("_id") != envelope.draft_id
+                or draft.get("version") != envelope.draft_version
+                or draft.get("body") != envelope.text
+                or approval.get("draft_id") != draft["_id"]
+                or approval.get("draft_version") != draft["version"]
+                or len(parts) != 3
+                or [part.get("part_index") for part in parts] != [0, 1, 2]
+                or any(part.get("status") != "accepted" for part in parts)
+                or parts[1].get("text") != envelope.text):
+            raise PublicationError("Approved weekly draft or preview changed before send")
     text_post_payload(envelope)
     profile_collection = getattr(db, "owner_profiles", None)
-    profile = await profile_collection.find_one({"_id": "profile", "installation_id": installation_id}) if profile_collection else None
+    profile = (await profile_collection.find_one({"_id": "profile", "installation_id": installation_id})
+               if profile_collection is not None else None)
     if profile and blocked_terms(envelope.text, profile["data"]):
         raise PublicationError("Approved post conflicts with a saved publication boundary")
     try:
@@ -78,6 +100,44 @@ async def _preflight(db, installation_id: str, bot_id: str, lease_token: str, jo
     if not token:
         raise PublicationError("LinkedIn credential is unavailable")
     return workflow, approval, envelope, token
+
+
+async def block_pending_publication(db, installation_id: str, reason: str) -> bool:
+    """Preserve the draft and consume an approval that cannot pass preflight."""
+    job = await db.jobs.find_one({"kind": "publish", "status": "pending"},
+                                 sort=[("created_at", 1)])
+    if not job:
+        return False
+    now = datetime.now(timezone.utc)
+    async with db.client.start_session() as session:
+        async with await session.start_transaction():
+            workflow = await db.workflows.find_one({"_id": job["workflow_id"],
+                "state": "PUBLISH_PENDING"}, session=session)
+            if not workflow:
+                return False
+            changed = await db.workflows.update_one({"_id": workflow["_id"],
+                "state": "PUBLISH_PENDING", "revision": workflow["revision"]},
+                {"$set": {"state": "AWAITING_REVIEW", "pending_preview.status": "preflight_blocked",
+                          "publication_error": reason, "updated_at": now},
+                 "$inc": {"revision": 1}}, session=session)
+            if changed.modified_count != 1:
+                return False
+            await db.jobs.update_one({"_id": job["_id"], "status": "pending"},
+                {"$set": {"status": "blocked", "error_code": "preflight_failed",
+                          "updated_at": now}}, session=session)
+            await db.approval_receipts.update_one({"_id": job["approval_id"],
+                "status": "pending_publication"},
+                {"$set": {"status": "invalidated_before_send"}}, session=session)
+            pending = workflow.get("pending_preview") or {}
+            await db.messages.insert_one({"_id": f"publication-preflight:{job['_id']}",
+                "channel": "telegram", "direction": "outbound",
+                "outbound_key": f"publication-notice:preflight:{job['_id']}",
+                "bot_id": pending.get("bot_id"), "chat_id": pending.get("chat_id"),
+                "binding_revision": pending.get("binding_revision"),
+                "text": "LinkedIn publishing was stopped before sending. Your draft is saved. "
+                        "Check the dashboard, then request a new FINAL preview and approval.",
+                "status": "pending", "created_at": now}, session=session)
+    return True
 
 
 async def _record_result(db, job: dict, result: PostResult) -> None:
@@ -168,7 +228,9 @@ async def publish_one(
                  "approval_id": approval["_id"], "envelope_hash": envelope.digest(),
                  "status": "PUBLISHING", "send_started_at": now,
                  "receiver_epoch": workflow["pending_preview"]["receiver_epoch"],
-                 "worker_lease_token": lease_token},
+                 "worker_lease_token": lease_token,
+                 "worker_pid": os.getpid(),
+                 "worker_created_at": psutil.Process(os.getpid()).create_time()},
                 session=session,
             )
             transition = await db.workflows.update_one(

@@ -145,6 +145,26 @@ class ApprovalIntakeTests(unittest.IsolatedAsyncioTestCase):
                          "validated_only")
         self.assertFalse(db.jobs.documents)
 
+    async def test_fresh_live_preview_creates_one_publish_job(self):
+        db = fixture_db()
+        workflow = db.workflows.documents["workflow"]
+        workflow.update({"kind": "weekly_topics", "installation_id": "install",
+                         "preview_id": "preview-2", "preview_issued_after_seq": 0,
+                         "linkedin_connection_revision": 0, "preview_profile_revision": 1})
+        workflow["pending_preview"]["mode"] = "publish"
+        db.draft_versions.documents["draft"]["version"] = 1
+        for part in db.messages.documents.values():
+            if part.get("direction") == "outbound":
+                part.update({"kind": "phase4_preview", "preview_id": "preview-2"})
+        self.assertEqual(await process_next_owner_message(db, "install", True),
+                         "publication_approved")
+        self.assertEqual(workflow["state"], "PUBLISH_PENDING")
+        receipt = next(iter(db.approval_receipts.documents.values()))
+        self.assertEqual(receipt["status"], "pending_publication")
+        self.assertEqual(len(db.jobs.documents), 1)
+        self.assertEqual(next(iter(db.jobs.documents.values()))["approval_id"], receipt["_id"])
+        self.assertIsNone(await process_next_owner_message(db, "install", True))
+
     async def test_phase4_changed_body_rejects_approval(self):
         db = fixture_db()
         workflow = db.workflows.documents["workflow"]

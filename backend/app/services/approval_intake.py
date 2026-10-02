@@ -35,7 +35,8 @@ async def process_next_owner_message(db, installation_id: str, publishing_enable
         return None
     command = parse_publish_command(message["text"])
     if command is None:
-        draft_result = await handle_draft_message(db, message, installation_id)
+        draft_result = await handle_draft_message(db, message, installation_id,
+                                                  publishing_enabled=publishing_enabled)
         if draft_result is not None:
             return draft_result
         topic_result = await handle_topic_message(db, message, installation_id)
@@ -46,7 +47,8 @@ async def process_next_owner_message(db, installation_id: str, publishing_enable
             {"$set": {"status": "unhandled", "processed_at": datetime.now(timezone.utc)}},
         )
         return "unhandled"
-    phase4_result = await validate_phase4_command(db, message, installation_id)
+    phase4_result = await validate_phase4_command(db, message, installation_id,
+                                                  publishing_enabled=publishing_enabled)
     if phase4_result is not None:
         return phase4_result
     async with db.client.start_session() as session:

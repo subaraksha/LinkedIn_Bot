@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api import connections, knowledge, topics
+from app.api import connections, knowledge, publications, topics
 from app.api.security import COOKIE, local_request_guard, require_session, sessions
 from app.config import get_settings
 from app.integrations.telegram import TelegramClient, TelegramError
@@ -22,6 +22,7 @@ app.middleware("http")(local_request_guard)
 app.include_router(connections.router)
 app.include_router(knowledge.router)
 app.include_router(topics.router)
+app.include_router(publications.router)
 dashboard_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if (dashboard_dir / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=dashboard_dir / "assets"), name="assets")

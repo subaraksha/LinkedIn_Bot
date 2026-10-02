@@ -98,3 +98,7 @@ The dashboard can start topic research immediately or save an optional weekly Te
 ### Drafts and approval check (Phase 4)
 
 In Telegram, send `DRAFT` after selecting a topic, give feedback in ordinary words to create immutable new versions, use `RESTORE <version>` to copy an older version forward, and send `FINAL` for an exact three-part preview. The dashboard shows draft history. The preview command checks approval only: it records a `validated_only` receipt and never creates a LinkedIn publishing job. Phase 5 requires a fresh preview and approval. See [Phase 4 status and commands](docs/phase-4-status.md).
+
+### Publishing and recovery (Phase 5)
+
+The default publishing switch remains off. Once enabled for an owner-reviewed live test, a new `FINAL` preview explicitly states that its one-use Telegram command will publish publicly. The worker checks the exact saved draft, account, owner binding, and profile again before a single LinkedIn request. Confirmed posts appear with a link in the dashboard; explicit rejection preserves the draft. If the outcome is uncertain, the app blocks retries and guides the owner through publisher quiescence and an audited outcome resolution. See [Phase 5 status and recovery](docs/phase-5-status.md).

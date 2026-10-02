@@ -171,6 +171,10 @@ async def mark_receiver_restart(db, installation_id: str, bot_id: str) -> None:
     now = datetime.now(timezone.utc)
     async with db.client.start_session() as session:
         async with await session.start_transaction():
+            invalidated = await db.workflows.find(
+                {"active": True, "state": {"$in": ["AWAITING_APPROVAL", "PUBLISH_PENDING"]}},
+                session=session,
+            ).to_list(length=100)
             result = await db.telegram_receivers.update_one(
                 {"_id": bot_id, "installation_id": installation_id},
                 {"$inc": {"connection_epoch": 1},
@@ -191,6 +195,20 @@ async def mark_receiver_restart(db, installation_id: str, bot_id: str) -> None:
                 {"$set": {"status": "blocked_by_gap", "updated_at": now}},
                 session=session,
             )
+            for workflow in invalidated:
+                pending = workflow.get("pending_preview") or {}
+                if not pending.get("chat_id") or not pending.get("binding_revision"):
+                    continue
+                notice_id = f"publication-restart:{workflow['_id']}:{workflow['revision']}"
+                await db.messages.insert_one({
+                    "_id": notice_id, "channel": "telegram", "direction": "outbound",
+                    "outbound_key": f"publication-notice:restart:{notice_id}",
+                    "bot_id": bot_id, "chat_id": pending["chat_id"],
+                    "binding_revision": pending["binding_revision"],
+                    "text": "The bot restarted before LinkedIn publishing began. Nothing was posted. "
+                            "The previous approval expired; reply FINAL for a fresh preview and command.",
+                    "status": "pending", "created_at": now,
+                }, session=session)
 
 
 async def record_owner_update(db, installation_id: str, bot_id: str, lease_token: str, update: dict) -> str:
