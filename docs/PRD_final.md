@@ -1,7 +1,7 @@
 # Product Requirements Document
 # Weekly LinkedIn Post Agent — V1
 
-**Version:** 1.3<br>
+**Version:** 1.4<br>
 **Date:** 2 October 2026<br>
 **Status:** Revised V1 scope — one local owner installation with direct Telegram integration<br>
 **Audience:** Product owner, Codex, and other coding agents
@@ -16,7 +16,7 @@ The agent learns from professional information supplied by the owner, proposes f
 
 The owner also has a web dashboard to review and correct what the application understands about them, manage preferences and connections, and inspect drafts and publishing history.
 
-This document records the agreed product behavior and the subsequently agreed operating constraints: local application execution, one owner and one configured MongoDB connection, and Gemini API access using an owner-supplied key. The messaging decision is direct integration with the official Telegram Bot API, with one owner-controlled bot identity and token. OpenClaw and WhatsApp are not part of V1. Detailed architecture, collection schemas, framework choices, and installation procedures belong in a separate system-design document. V1 is the release name; 1.3 is this document revision. This revision supersedes the prior two-installation release requirement. Architecture revision 1.3 is the matching implementation baseline.
+This document records the agreed product behavior and operating constraints: local application execution, one owner and one configured MongoDB connection, Gemini API access using an owner-supplied key, and a portable owner-controlled knowledge export. Messaging uses the official Telegram Bot API with one owner-controlled bot identity and token. OpenClaw and WhatsApp are not part of V1. Detailed architecture, collection schemas, framework choices, and installation procedures belong in a separate system-design document. V1 is the release name; 1.4 is this document revision. This revision retains the single-installation decision from 1.3. Architecture revision 1.4 is the matching implementation baseline.
 
 ## 2. Product objectives
 
@@ -175,8 +175,11 @@ The following 14 features preserve the agreed product development order. All are
 - Allow entries to be marked suitable for posts or private context only.
 - Show when information was last updated.
 - Give user corrections priority over earlier interpretations.
+- Let the owner download a complete, reusable copy of their current stored professional knowledge and writing preferences in both structured and readable formats. Keep fact status, evidence, provenance, privacy permission, revision, and update timestamps needed to interpret the current profile.
+- Provide a separate public-only export suitable as input to a portfolio; exclude private facts, pending inferences, confidential boundaries, and private source excerpts.
+- Keep a current local export after accepted profile changes and show when export generation is behind the saved database revision.
 
-**Scope boundary:** Show stored facts and explicit inferences, not internal model reasoning. Uploaded material is not automatically approved for public use.
+**Scope boundary:** Show and export stored facts and explicit inferences, not internal model reasoning or unstored model memory. Uploaded material is not automatically approved for public use. A portable export is not live synchronisation with other applications; external edits require a validated import rather than silently changing the active profile.
 
 **Acceptance criteria**
 
@@ -185,6 +188,11 @@ The following 14 features preserve the agreed product development order. All are
 - Corrections are reflected in subsequent recommendations and drafts; deleted entries are no longer used as active profile facts.
 - Information marked private does not appear in generated public post content.
 - Unresolved conflicts are visible and are not silently converted into confirmed claims.
+- The owner can open the full export without this application, and another program can validate and read its documented, versioned structured format. A readable Markdown copy contains the same current profile facts with their status and privacy labels.
+- Full export preserves evidence links and current preferences without credentials, tokens, approval challenges, or unrelated raw conversation history. Deleted claims are absent from active exports and cannot be silently reintroduced by import.
+- The public-only export contains only confirmed, explicitly public facts and safe writing information; a private fact or source excerpt never appears in it.
+- If export generation fails after a profile edit, the edit remains saved, the dashboard labels the local export as outdated, and the owner can retry. A fresh export reflects the latest committed profile revision.
+- A validated export can be read or imported into an empty test installation without losing fact status, provenance, or publication permission; import never restores publishing approval.
 
 ### F05. Content goals, writing preferences, and boundaries
 
@@ -544,12 +552,13 @@ V1 is complete when the owner can run the application on their computer, using l
 7. Review the exact final version and explicitly approve publication to their own LinkedIn profile.
 8. Receive a confirmed publication result and link, or an accurate explanation of a problem with the draft preserved.
 9. Review their current workflow, previous drafts, preferences, and publishing history in the dashboard.
+10. Download the full portable knowledge bundle and a separate public-only profile; verify the bundle reflects their latest accepted corrections and privacy settings.
 
 Completion also requires successful G1–G3 validation on the owner installation, secure private-chat owner pairing, and proof that a stop/restart preserves progress. Verify that a duplicate update, unauthorised sender, forwarded command, or edited message cannot publish; a known polling gap requires a fresh approval. The installation must access only its configured database without a user-management flow. Unsupported personal achievements must not be invented, changed drafts require fresh approval, and repeated approvals must not produce duplicate posts. Database or quota failures must be reported without falsely claiming saved progress or successful publication. A stop/restart must preserve previously saved workflow progress, and a missed schedule must not cause a backlog of automatic posts.
 
 ## 10. Instructions for coding agents using this PRD
 
-- Treat revision 1.3 as the current V1 product scope. It supersedes WhatsApp, OpenClaw, self-chat, a shared bot number, and the earlier two-installation release requirement. Use one owner-controlled Telegram bot.
+- Treat revision 1.4 as the current V1 product scope. It adds portable owner knowledge to the 1.3 single-installation baseline and retains the exclusions of WhatsApp, OpenClaw, self-chat, and a shared bot number. Use one owner-controlled Telegram bot.
 - The existing system architecture revision 1.1 has not been rewritten by this PRD update. Before coding its messaging path, replace its OpenClaw gateway/adapter, QR/session setup, WhatsApp environment variables, self-chat rules, and old G1 with this Telegram contract. Preserve the existing approval, worker, MongoDB, and LinkedIn safeguards where compatible.
 - Build for one owner with local environment configuration and a configured MongoDB connection. Do not add account registration or persona switching.
 - Keep the owner knowledge profile and review dashboard; removing multi-user management does not remove personalisation.
@@ -568,6 +577,11 @@ Completion also requires successful G1–G3 validation on the owner installation
 
 
 ## 11. Revision history
+
+### Revision 1.4 — 2 October 2026
+
+- Added a portable full knowledge export and a separate public-only profile under F04, with versioned structured data, readable Markdown, provenance, privacy labels, and explicit export freshness.
+- Added independent validation/import into an empty test installation to Phase 2 acceptance. Export/import does not create publication approval or cross-application synchronisation.
 
 ### Revision 1.3 — 2 October 2026
 

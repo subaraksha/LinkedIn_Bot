@@ -1,6 +1,6 @@
 # LinkedIn Post Agent
 
-Local scaffold for the single-owner V1 product. The current release target is one owner installation under PRD and architecture revision 1.3. Read the [PRD](docs/PRD_final.md) and [architecture](docs/SystemDesign_Final.md) before feature work.
+Local scaffold for the single-owner V1 product. The current release target is one owner installation under PRD and architecture revision 1.4. Read the [PRD](docs/PRD_final.md), [architecture](docs/SystemDesign_Final.md), and [portable knowledge contract](docs/knowledge-portability.md) before Phase 2 work.
 
 ## Start the scaffold
 

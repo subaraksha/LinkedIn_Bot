@@ -1,25 +1,25 @@
 # Weekly LinkedIn Post Agent — V1
 # System Architecture and Detailed Design
 
-**Document version:** 1.3<br>
+**Document version:** 1.4<br>
 **Date:** 2 October 2026<br>
-**Baseline:** `docs/PRD_final.md`, revision 1.3<br>
+**Baseline:** `docs/PRD_final.md`, revision 1.4<br>
 **Audience:** Codex, coding agents, and the application owner<br>
 **Status:** Single-installation implementation baseline; gate status is tracked in `docs/integration-validation.md`
-**Revision scope:** Aligns with PRD 1.3: one owner installation, direct Telegram integration, local polling, secure pairing, and review-driven publication. Historical revision notes remain below.
+**Revision scope:** Aligns with PRD 1.4: the 1.3 single-owner and Telegram baseline plus portable professional knowledge exports. Historical revision notes remain below.
 **Review verdict:** Proceed with validation and implementation on the owner installation. Gate evidence is tracked separately.
 
 ## 1. Purpose, authority, and decisions
 
-This document translates PRD 1.3 into an implementable design. It does not add a new product release or expand its 14 features. If this document conflicts with the PRD, preserve the PRD's product behavior and flag the conflict. Values labelled “design default” resolve implementation details; they are not provider guarantees.
+This document translates PRD 1.4 into an implementable design. It does not add a new product release or expand its 14 feature IDs. If this document conflicts with the PRD, preserve the PRD's product behavior and flag the conflict. Values labelled “design default” resolve implementation details; they are not provider guarantees.
 
 Build one single-owner application on the owner’s computer. Share source code and placeholder configuration only. The owner supplies one configured MongoDB connection, Gemini key, LinkedIn authorisation, and Telegram bot/token. There is no central backend, user directory, tenant selector, or shared research cache.
 
-### 1.0 Revision 1.3 reading guide
+### 1.0 Revision 1.4 reading guide
 
 This is a complete revised architecture, not a separate review memo. Changes are integrated into their owning sections. Section 22 provides a change register and an implementation checklist for coding agents.
 
-The PRD remains the product authority. This revision preserves its stated 14-feature scope and implements previously described recovery/security behavior more concretely. The current PRD 1.3 was read for this revision. Its Telegram decision supersedes all earlier WhatsApp, self-chat, and shared-number assumptions. Live integration evidence is recorded in `docs/integration-validation.md`. This document replaces architecture revision 1.2 as the implementation baseline.
+The PRD remains the product authority. This revision preserves its 14 feature IDs and adds the agreed F04 knowledge portability behavior. The current PRD 1.4 was read for this revision. Its Telegram decision supersedes all earlier WhatsApp, self-chat, and shared-number assumptions. Live integration evidence is recorded in `docs/integration-validation.md`. This document replaces architecture revision 1.3 as the implementation baseline.
 
 No new product decision is required to start phase 0. Values labelled design defaults can be tuned without weakening the invariants. Do not turn an unpassed gate into an assumed capability.
 
@@ -172,7 +172,7 @@ Use majority-acknowledged writes for workflow, approval, job, and publication re
 
 | Collection | Core fields | Purpose |
 | --- | --- | --- |
-| `owner_settings` | `_id=owner`, installation ID, profile summary, target roles, preferences, timezone, `knowledge_revision`, `preferences_revision`, `next_event_seq`, revision | Single owner and settings; summaries are derived from individual facts |
+| `owner_settings` | `_id=owner`, installation ID, profile summary, target roles, preferences, timezone, `knowledge_revision`, `preferences_revision`, `profile_revision`, export status/revision, `next_event_seq`, revision | Single owner and settings; summaries are derived from individual facts |
 | `sources` | ID, kind, local relative path or public URL, content hash, extraction status, source version, parser version | Resume, profile text, repository README, and user-supplied source provenance |
 | `knowledge_entries` | ID, type, claim, status, publication permission, experience context, evidence references, revision, deletion marker | Editable facts/inferences with provenance |
 | `research_items` | ID, canonical URL, latest snapshot ID, latest fetch status/time | Mutable URL catalogue; never the sole historical evidence reference |
@@ -287,6 +287,20 @@ The application, not Gemini memory, determines context:
 - Retain source IDs and model/prompt/context revisions with each generated result.
 
 Default inputs are bounded by a configurable token budget. Summarise older history or ask for clarification rather than silently dropping current constraints. A local dashboard is the only surface for inspecting private knowledge evidence.
+
+### 6.4 Portable owner knowledge
+
+MongoDB remains the authoritative working profile. A portable export is a **derived snapshot**, not a second editable source of truth. This prevents a file edit and a dashboard edit from silently diverging. The export contract is documented in [`docs/knowledge-portability.md`](knowledge-portability.md); implementation must publish a versioned JSON Schema alongside the exporter. Markdown is generated from the same validated snapshot rather than parsed back into facts.
+
+The full export contains current owner profile facts, statuses (`confirmed`, `pending_confirmation`, `disputed`), fact-level publication permissions, experience context, evidence references and bounded excerpts, source metadata, clarification answers/skips, goals, writing preferences, optional writing samples, and revision/update timestamps. It contains no credentials, provider tokens, pairing/approval challenges, approval receipts, or unrelated raw Telegram conversation history. Deleted claims are not active facts; retain only the minimum suppression markers needed to prevent their automatic resurrection. Personal input from a conversation enters this profile only through an explicit knowledge-entry review path.
+
+Provide two separately named downloads: **Full knowledge** (private by default) and **Public profile**. The public profile is an allowlist projection of confirmed facts explicitly permitted for publication and safe display preferences. It excludes private/pending/disputed facts, private source excerpts, confidential boundaries (including the text of prohibited details), original uploads, and questions/answers that have not been explicitly made public. Reuse the existing context-builder permission rules; the public export may be stricter. A synthetic private canary must remain absent from every public output.
+
+Design default bundle layout: `manifest.json` (format version, export time, owner/profile revision, file hashes), `profile.json` (machine-readable data), `profile.md` (human-readable current profile), and a published schema identifier. An explicitly chosen full bundle may also include `sources/` with original uploads and a manifest linking generated filenames to source IDs; originals are never included in the public export. No proprietary binary format or running app is needed to inspect the JSON/Markdown. A future portfolio can read `profile.json` or the public projection without accessing MongoDB.
+
+Every accepted source, knowledge, clarification, or preference mutation increments a shared `profile_revision` in the same database transaction as the change. Build each export from one consistent committed snapshot. After that commit, regenerate the local full export under `APP_DATA_DIR/exports` using a temporary file/directory, validate it, fsync it, and atomically replace the previous snapshot. Store export revision/time/status separately. If export generation fails, retain the prior files, mark them **outdated** in the dashboard, and offer Retry/Download fresh; never label the old files current or roll back a successfully saved profile edit. A manual download either generates a fresh snapshot or clearly reports failure; it must not serve an outdated file as the latest revision. Use owner-only local file permissions and ignore this directory in Git. A public export is generated only from an explicitly requested current snapshot and is also stored under the ignored local directory.
+
+Import validates the declared format version, schema, manifest hashes, relative paths, size bounds, and publication permissions before writing. Preview any conflicts and require an explicit owner choice; never overwrite a populated profile or restore connection secrets, workflows, approvals, or publishing authority by default. A round-trip test imports the full bundle into a uniquely named temporary database and checks IDs, statuses, evidence links, preferences, and privacy labels. Markdown alone is for reading; `profile.json` is the re-import contract.
 
 ## 7. Research and Gemini design
 
@@ -641,6 +655,11 @@ All application HTTP routes, are loopback-only under `/api/v1`; “public” in 
 | `POST /knowledge` | Owner-supplied fact and permission | Confirmed entry with provenance |
 | `PATCH /knowledge/{id}` | Edit/confirm/dispute/permission with expected revision | Updated entry and context revision |
 | `DELETE /knowledge/{id}` | Expected revision | Removed from active context; minimal suppression marker |
+| `GET /knowledge/export/status` | Current owner session | Latest profile/export revisions and current/outdated/error state |
+| `POST /knowledge/exports` | Scope `full` or `public`; optional originals only for full | Validated export job and scope; no stale download represented as current |
+| `GET /knowledge/exports/{id}` | Owner session; completed export ID | Versioned bundle attachment with manifest and checksum |
+| `POST /knowledge/imports/preview` | Full bundle upload | Schema/hash/privacy validation and conflict preview; no database mutation |
+| `POST /knowledge/imports/{id}/apply` | Preview ID and expected profile revision | Explicit import into empty profile or approved merge; never restores publication authority |
 | `GET /clarifications` | Pending onboarding questions | Answered/skipped/unresolved status |
 | `POST /clarifications/{id}/answer` | Answer or skip | Evidence-linked update and next question |
 | `GET /schedule` | Current invitation settings | Timezone, next run, paused state |
@@ -688,6 +707,7 @@ Use 409 for stale revisions, 422 for invalid input, 401/403 for invalid local se
 | --- | --- | --- |
 | Setup and connections | Local configuration readiness, document import, bot identity and owner pairing, polling/webhook status, LinkedIn connection status | F01–F03 |
 | Knowledge | Confirmed/pending/disputed entries, evidence, edit/delete, publication permission, last update | F04 |
+| Knowledge export | Full/private and public-only downloads, source-archive choice, current/outdated revision, retry, import preview | F04 |
 | Preferences | Target roles, style, boundaries, optional writing samples | F05 |
 | Weekly activity | Schedule, current stage, selected topic, latest draft, recoverable failure, uncertain-publication evidence and resolution action | F06–F13 |
 | History | Versions, restore action, final outcomes, confirmed/owner-reported links | F10, F14 |
@@ -701,6 +721,7 @@ Use plain status labels and explicit evidence. Do not show hidden model reasonin
 - OAuth callback routes are an exception to normal Origin checking but must validate their one-use state and registered redirect. Do not log callback query strings.
 - Trust incoming Telegram envelopes only from the authenticated Bot API client over verified TLS. Apply paired numeric owner/chat checks in code; never accept browser-supplied message envelopes as owner commands.
 - Keep API keys, LinkedIn tokens, local TLS keys, and Telegram bot tokens outside Git. Use OS credential storage where available; otherwise encrypted local token files with a separately supplied key. Do not store the decryption key alongside the encrypted file. `.env` permissions should restrict access to the owner.
+- Keep full knowledge exports and optional originals under the ignored owner-only local data directory. Full export is sensitive even without credentials. Use attachment downloads with `nosniff`; do not place export files under the static dashboard asset path or log their contents.
 - MongoDB stores connection status and secret references, not plaintext LinkedIn/Telegram credentials. Use TLS to Atlas and scope database credentials/network access deliberately.
 - Source files get generated filenames and strict path containment. No user input becomes a shell command. Block oversized downloads, traversal paths, and private-network URL fetches.
 - Treat scraped text and documents as untrusted input. They cannot change system prompts, grant publication authority, fetch secrets, or execute tools.
@@ -822,7 +843,7 @@ Create synthetic or owner-approved fixtures for: team contribution ambiguity; le
 
 ### 18.5 End-to-end acceptance
 
-Run the PRD journey on the owner installation: onboard, inspect/correct knowledge, receive topics, add input, revise, pause/restart, final preview, explicit approval, publication result, and history. Also demonstrate an unknown-outcome simulation that cannot create an automatic second post. Completion requires all 14 feature acceptance areas and successful integration gates.
+Run the PRD journey on the owner installation: onboard, inspect/correct knowledge, export the current full and public profiles, receive topics, add input, revise, pause/restart, final preview, explicit approval, publication result, and history. Also demonstrate an unknown-outcome simulation that cannot create an automatic second post. Completion requires all 14 feature acceptance areas and successful integration gates.
 
 ## 19. Implementation sequence and PRD traceability
 
@@ -832,7 +853,7 @@ The integration checks precede full feature work because they can invalidate a t
 | --- | --- | --- |
 | 0 | G1 Telegram, G2 LinkedIn, G3 MongoDB/Gemini prototypes and narrow integration journey | Evidence recorded on the owner installation; mocks distinguished; RV04–RV06/G2 essentials demonstrated; blockers reported |
 | 1 | F01 independent configuration, runtime, database, credentials | One configured owner database connects correctly; no multi-user UI |
-| 2 | F02–F05 sources, clarification, knowledge dashboard, preferences | Evidence-linked corrections control subsequent context |
+| 2 | F02–F05 sources, clarification, knowledge dashboard, preferences, portable exports | Evidence-linked corrections control subsequent context; full/public exports validate independently and round-trip without privacy loss |
 | 3 | F06–F08 research, invitation/selection, personal input | Four/five grounded options and resume-safe conversation |
 | 4 | F09–F11 drafts, versions, exact approval | Stale/ambiguous approvals rejected; no external publishing yet |
 | 5 | F12 publication and recovery | Approved body only; known and unknown outcomes handled |
@@ -845,7 +866,7 @@ Persistence, job infrastructure, and version control begin in phase 1 because la
 | F01 Single-owner workspace | 1–5, 14, 17 |
 | F02 Professional sources | 5–6, 12 |
 | F03 Guided questions | 6, 12–13 |
-| F04 Knowledge dashboard | 5–6, 12–14 |
+| F04 Knowledge dashboard and portability | 5–6, 12–14; `docs/knowledge-portability.md` |
 | F05 Goals/preferences/boundaries | 5–7, 13 |
 | F06 Topic discovery | 7, 10 |
 | F07 Weekly interaction | 8, 10–11 |
@@ -903,7 +924,15 @@ Telegram documentation was checked on 1 October 2026 for PRD 1.2. LinkedIn/OIDC 
 - **R13 — Telegram message contract:** [Message](https://core.telegram.org/bots/api#message), [sendMessage](https://core.telegram.org/bots/api#sendmessage), and [getMe](https://core.telegram.org/bots/api#getme). Verify exact payload behavior against the pinned client.
 - **R14 — LinkedIn identity:** [Sign In with LinkedIn using OpenID Connect](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2). Validate granted `openid profile` scopes and member identity through the owner application's actual flow.
 
-## 22. Revision 1.3 changes and coding-agent checklist
+## 22. Revision changes and coding-agent checklist
+
+### Revision 1.4 — portable owner knowledge
+
+- Added full/private and public-only exports to F04, with a versioned JSON contract, readable Markdown, provenance, privacy filtering, optional original-source archive, and explicit freshness after profile edits.
+- Added validated import/round-trip checks to Phase 2. The exporter is derived from the authoritative MongoDB profile; it does not create a second live source of truth or restore publishing authority.
+- The detailed format and Phase 2 acceptance checks are in `docs/knowledge-portability.md`.
+
+### Historical revision 1.3 changes
 
 - Changed the release target to one owner installation in line with PRD 1.3; historical two-owner notes below describe previous scope only.
 - Kept the single-owner authority, one-receiver rule, restart recovery, MongoDB, Gemini, Telegram, and LinkedIn safeguards.
@@ -940,4 +969,4 @@ If code has already been generated from revision 1.1, remove its messaging-speci
 4. Implement immutable drafts/envelopes/snapshots, transactional job creation, ordered commands, independent heartbeats, and the complete reconciliation path. Passing a happy-path post is not sufficient.
 5. Pass the applicable domain/repository/integration tests and RV01–RV12, then run the complete PRD journey on the owner installation. Keep gate evidence and version locks in the repository.
 
-Do not add a new hosted service, paid dependency, shared database, automatic posting rule, or alternate publishing channel to make tests pass. The architecture is intended to remain local, single-owner, and approval-controlled. Revision 1.3 is the current implementation baseline. Live messages and posts still require the owner’s applicable authorization in the product workflow.
+Do not add a new hosted service, paid dependency, shared database, automatic posting rule, or alternate publishing channel to make tests pass. The architecture remains local, single-owner, and approval-controlled. Revision 1.4 is the current implementation baseline. Live messages and posts still require the owner’s applicable authorization in the product workflow.
