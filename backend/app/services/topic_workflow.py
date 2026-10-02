@@ -55,9 +55,18 @@ def next_occurrence(weekday: int, local_time: str, timezone_name: str,
 
 async def get_schedule(db, installation_id: str, default_timezone: str) -> dict:
     row = await db.weekly_schedules.find_one({"_id": "owner", "installation_id": installation_id})
-    return ({"enabled": False, "weekday": 0, "local_time": "09:00",
-             "timezone": default_timezone, "next_at": None, "revision": 0} if not row else
-            {key: row.get(key) for key in ("enabled", "weekday", "local_time", "timezone", "next_at", "revision")})
+    if not row:
+        return {"enabled": False, "weekday": 0, "local_time": "09:00",
+                "timezone": default_timezone, "next_at": None, "revision": 0,
+                "paused": False}
+    result = {key: row.get(key) for key in ("enabled", "weekday", "local_time",
+                                         "timezone", "next_at", "revision")}
+    # MongoDB returns UTC datetimes without tzinfo by default. Make the API timestamp
+    # explicit so browsers outside UTC do not reinterpret it as their own wall time.
+    if result["next_at"] and result["next_at"].tzinfo is None:
+        result["next_at"] = result["next_at"].replace(tzinfo=timezone.utc)
+    result["paused"] = bool(row.get("paused", False))
+    return result
 
 
 async def save_schedule(db, installation_id: str, *, expected_revision: int,
@@ -71,11 +80,36 @@ async def save_schedule(db, installation_id: str, *, expected_revision: int,
     update = await db.weekly_schedules.update_one(
         {"_id": "owner", "installation_id": installation_id, "revision": expected_revision},
         {"$set": {"enabled": enabled, "weekday": weekday, "local_time": local_time,
-                  "timezone": timezone_name, "next_at": next_at, "updated_at": now_utc()},
+                  "timezone": timezone_name, "next_at": next_at, "paused": False,
+                  "updated_at": now_utc()},
          "$inc": {"revision": 1}}, upsert=expected_revision == 0)
     if not update.matched_count and not update.upserted_id:
         raise TopicWorkflowError("Schedule changed; refresh before saving")
     return await get_schedule(db, installation_id, timezone_name)
+
+
+async def set_schedule_paused(db, installation_id: str, default_timezone: str,
+                              *, expected_revision: int, paused: bool) -> dict:
+    current = await get_schedule(db, installation_id, default_timezone)
+    if current["revision"] != expected_revision:
+        raise TopicWorkflowError("Schedule changed; refresh before trying again")
+    if paused and not current["enabled"]:
+        raise TopicWorkflowError("Enable a weekly invitation schedule before pausing it")
+    if not paused and not current["paused"]:
+        raise TopicWorkflowError("The weekly invitation schedule is not paused")
+    next_at = (None if paused else next_occurrence(current["weekday"],
+        current["local_time"], current["timezone"]))
+    result = await db.weekly_schedules.update_one(
+        {"_id": "owner", "installation_id": installation_id, "revision": expected_revision,
+         "enabled": current["enabled"], "paused": current["paused"]} if current["paused"] else
+        {"_id": "owner", "installation_id": installation_id, "revision": expected_revision,
+         "enabled": current["enabled"], "paused": {"$ne": True}},
+        {"$set": {"enabled": not paused, "paused": paused, "next_at": next_at,
+                  "updated_at": now_utc()}, "$inc": {"revision": 1}},
+    )
+    if result.modified_count != 1:
+        raise TopicWorkflowError("Schedule changed; refresh before trying again")
+    return await get_schedule(db, installation_id, default_timezone)
 
 
 async def queue_message(db, workflow: dict, key: str, text: str, *, session=None) -> None:
@@ -122,12 +156,13 @@ async def current_workflow(db, installation_id: str) -> dict | None:
     return {key: row.get(key) for key in ("_id", "short_code", "slot_key", "state", "revision",
             "shortlist_revision", "shortlist", "selected_topic", "perspective", "experience",
             "error", "draft_error", "publication_error", "post_url", "draft_version",
-            "draft_id", "created_at", "updated_at", "invitation_sent_at")}
+            "draft_id", "created_at", "updated_at", "invitation_sent_at",
+            "input_step")}
 
 
 async def schedule_tick(db, installation_id: str) -> None:
     schedule = await db.weekly_schedules.find_one({"_id": "owner", "installation_id": installation_id,
-        "enabled": True, "next_at": {"$lte": now_utc()}})
+        "enabled": True, "paused": {"$ne": True}, "next_at": {"$lte": now_utc()}})
     if not schedule:
         return
     next_at = next_occurrence(schedule["weekday"], schedule["local_time"],
@@ -267,8 +302,10 @@ async def dispatch_topic_messages(db, telegram, installation_id: str) -> None:
             sort=[("created_at", 1)])
         if not message:
             return
-        workflow = await db.workflows.find_one({"_id": message["workflow_id"]})
-        if not workflow or workflow.get("kind") != "weekly_topics":
+        workflow = (await db.workflows.find_one({"_id": message["workflow_id"]})
+                    if message.get("workflow_id") else None)
+        if not message.get("standalone_owner_notice") and (
+                not workflow or workflow.get("kind") != "weekly_topics"):
             await db.messages.update_one({"_id": message["_id"], "status": "sending"},
                 {"$set": {"status": "cancelled"}})
             continue
@@ -285,6 +322,99 @@ async def dispatch_topic_messages(db, telegram, installation_id: str) -> None:
         if message["_id"].startswith("invitation:"):
             await db.workflows.update_one({"_id": workflow["_id"]},
                 {"$set": {"invitation_sent_at": sent_at}})
+
+
+def continuation_recap(workflow: dict, now: datetime | None = None) -> str:
+    """Describe saved progress without implying that unsaved Telegram input was recovered."""
+    now = now or now_utc()
+    state = workflow["state"]
+    topic = (workflow.get("selected_topic") or {}).get("title")
+    lines = [f"Saved conversation: {topic or 'topic selection'}."]
+    if state == "AWAITING_TOPIC":
+        lines.append("Reply TOPICS to see the saved shortlist, or MY TOPIC: <idea>.")
+    elif state == "AWAITING_INPUT":
+        if workflow.get("input_step") == "experience":
+            lines.append("Your perspective is saved. Reply HANDS ON, EXPLORING, or SKIP INPUT.")
+        else:
+            lines.append("Your topic is saved. Share your view, or reply SKIP INPUT.")
+    elif state in {"RESEARCH_PENDING", "RESEARCH_FAILED"}:
+        lines.append("Topic research is pending or needs attention. Reply TOPICS later, or MY TOPIC: <idea>.")
+    elif state == "READY_FOR_DRAFT":
+        lines.append("Your topic and input are saved. Reply DRAFT to create a draft.")
+    elif state == "DRAFT_GENERATING":
+        lines.append("A draft request is running. Wait for its result before reviewing.")
+    elif state in {"DRAFT_REVIEW", "AWAITING_REVIEW", "DRAFT_FAILED"}:
+        lines.append(f"Draft V{workflow.get('draft_version', 0)} is saved. Reply DRAFT to retry, "
+                     "send feedback, or reply FINAL for a fresh exact preview.")
+    elif state in {"AWAITING_APPROVAL", "PUBLISH_PENDING", "PREVIEW_SENDING"}:
+        lines.append(f"Draft V{workflow.get('draft_version', 0)} is saved. "
+                     "The earlier approval is no longer usable. Reply FINAL for a fresh preview.")
+    elif state in {"PUBLISHING", "PUBLISH_UNKNOWN"}:
+        lines.append("A LinkedIn request may already be in progress or uncertain. "
+                     "Check the dashboard before taking further action.")
+    else:
+        lines.append("Your saved progress is available in the dashboard.")
+    updated = workflow.get("updated_at")
+    if updated and (now - (updated.replace(tzinfo=timezone.utc)
+                           if updated.tzinfo is None else updated)) >= timedelta(days=7):
+        lines.append("This conversation is over a week old. Review time-sensitive claims and sources before FINAL.")
+    lines.append("Messages sent while the bot was offline may need to be resent if Telegram did not deliver them.")
+    return "\n".join(lines)
+
+
+async def handle_continue_message(db, message: dict, installation_id: str) -> str | None:
+    if message["text"].strip().upper() != "CONTINUE":
+        return None
+    workflow = await db.workflows.find_one({"active": True, "installation_id": installation_id,
+                                            "kind": "weekly_topics"})
+    if not workflow:
+        now = now_utc()
+        async with db.client.start_session() as session:
+            async with await session.start_transaction():
+                changed = await db.messages.update_one({"_id": message["_id"],
+                    "status": "accepted_unprocessed"},
+                    {"$set": {"status": "processed", "processed_at": now}}, session=session)
+                if changed.modified_count != 1:
+                    return "already_processed"
+                await db.messages.insert_one({"_id": f"continue-empty:{message['_id']}",
+                    "channel": "telegram", "direction": "outbound",
+                    "kind": "phase3_topic", "standalone_owner_notice": True,
+                    "outbound_key": f"continue-empty:{message['_id']}",
+                    "text": "There is no active conversation. Start a new topic from the dashboard; "
+                            "your previous posts and drafts are in Recent outcomes.",
+                    "status": "pending", "created_at": now}, session=session)
+        return "no_active_conversation"
+    now = now_utc()
+    invalidates = workflow["state"] in {"AWAITING_APPROVAL", "PUBLISH_PENDING", "PREVIEW_SENDING"}
+    recap = continuation_recap(workflow, now)
+    async with db.client.start_session() as session:
+        async with await session.start_transaction():
+            current = await db.messages.find_one({"_id": message["_id"],
+                "status": "accepted_unprocessed"}, session=session)
+            if not current:
+                return "already_processed"
+            if invalidates:
+                changed = await db.workflows.update_one({"_id": workflow["_id"],
+                    "revision": workflow["revision"], "state": workflow["state"]},
+                    {"$set": {"state": "AWAITING_REVIEW", "pending_preview.status": "invalidated_by_owner",
+                              "updated_at": now}, "$inc": {"revision": 1}}, session=session)
+                if changed.modified_count != 1:
+                    return "workflow_changed"
+                await db.jobs.update_many({"kind": "publish", "workflow_id": workflow["_id"],
+                    "status": "pending"}, {"$set": {"status": "cancelled_by_owner", "updated_at": now}},
+                    session=session)
+                await db.messages.update_many({"kind": "phase4_preview",
+                    "preview_id": workflow.get("preview_id"), "status": "pending"},
+                    {"$set": {"status": "cancelled", "updated_at": now}}, session=session)
+                if workflow.get("approval_id"):
+                    await db.approval_receipts.update_one({"_id": workflow["approval_id"],
+                        "status": "pending_publication"},
+                        {"$set": {"status": "cancelled_by_owner"}}, session=session)
+            await db.messages.update_one({"_id": message["_id"], "status": "accepted_unprocessed"},
+                {"$set": {"status": "processed", "processed_at": now,
+                          "workflow_id": workflow["_id"]}}, session=session)
+            await queue_message(db, workflow, f"topic_reply:{message['_id']}", recap, session=session)
+    return "continued"
 
 
 async def handle_topic_message(db, message: dict, installation_id: str) -> str | None:

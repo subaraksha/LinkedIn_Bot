@@ -29,18 +29,23 @@ type OwnerProfile = {
 type ListField = "target_roles" | "interests" | "content_goals" | "avoid_phrases" | "avoid_styles" | "avoid_topics" | "confidential_details" | "writing_samples";
 type Question = { id: string; kind: string; prompt: string; fact_id: string | null; status: string; answer: string | null; revision: number };
 type Topic = { title: string; why_now: string; why_you: string; angle: string; sources: { url: string; title: string }[] };
-type TopicStatus = { schedule: { enabled: boolean; weekday: number; local_time: string; timezone: string; next_at: string | null; revision: number };
+type TopicStatus = { schedule: { enabled: boolean; paused: boolean; weekday: number; local_time: string; timezone: string; next_at: string | null; revision: number };
   telegram_delivery_uncertain: boolean;
   publishing_enabled: boolean;
   drafts: { _id: string; version: number; body: string; restored_from?: number; created_at: string }[];
   recent_outcomes: { _id: string; state: string; selected_topic?: { title: string };
-    post_url?: string | null; post_evidence_source?: string | null }[];
+    post_url?: string | null; post_evidence_source?: string | null; updated_at?: string;
+    draft_version?: number }[];
   recovery: { attempt_id: string; workflow_revision: number; result_reason?: string;
     quiesced: boolean; error?: string } | null;
   workflow: { _id: string; state: string; shortlist_revision: number; shortlist: Topic[]; selected_topic: Topic | null;
     perspective: string | null; experience: string; draft_error?: string | null;
     publication_error?: string | null; post_url?: string | null;
     draft_version?: number; error?: string | null } | null };
+type HistoryDetail = { workflow: { _id: string; state: string; perspective?: string | null;
+  selected_topic?: { title: string }; post_url?: string | null };
+  drafts: { _id: string; version: number; body: string; feedback?: string | null;
+    restored_from?: number }[] };
 
 type Pairing = {
   status: string;
@@ -69,6 +74,7 @@ export default function App() {
   const [topicStatus, setTopicStatus] = useState<TopicStatus | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<TopicStatus["schedule"] | null>(null);
   const [topicNotice, setTopicNotice] = useState<string | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<HistoryDetail | null>(null);
   const [recoveryAcknowledged, setRecoveryAcknowledged] = useState(false);
   const [recoveryPostUrl, setRecoveryPostUrl] = useState("");
   const [sourceLabel, setSourceLabel] = useState("LinkedIn profile text");
@@ -350,6 +356,32 @@ export default function App() {
     finally { setBusy(false); }
   }
 
+  async function changeSchedulePause(paused: boolean) {
+    if (!topicStatus) return;
+    setBusy(true); setError(null); setTopicNotice(null);
+    try {
+      await mutate("/api/v1/topics/schedule/pause", "PUT", {
+        expected_revision: topicStatus.schedule.revision, paused,
+      });
+      await loadTopics();
+      setTopicNotice(paused ? "Weekly invitations paused. Your current conversation is saved." :
+        "Weekly invitations resumed. Your next invitation is scheduled.");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function toggleHistory(workflowId: string) {
+    if (historyDetail?.workflow._id === workflowId) { setHistoryDetail(null); return; }
+    setBusy(true); setError(null);
+    try {
+      const response = await fetch(`/api/v1/topics/history/${encodeURIComponent(workflowId)}`,
+        { credentials: "same-origin" });
+      if (!response.ok) throw new Error("Could not load this conversation's history");
+      setHistoryDetail(await response.json() as HistoryDetail);
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
   async function quiescePublisher() {
     const workflow = topicStatus?.workflow;
     if (!workflow) return;
@@ -438,8 +470,8 @@ export default function App() {
         <section className="card">
           <p className="eyebrow">WEEKLY TOPICS</p>
           <h2>Find ideas to discuss</h2>
-          <p className="muted">Research uses the public feeds listed in <code>config/research-sources.json</code>. You can then create and revise a draft through Telegram. Approval checks in this phase do not publish it.</p>
-          {scheduleDraft && <form className="stack" onSubmit={(event) => void saveSchedule(event)}>
+          <p className="muted">Find sourced ideas, discuss one in Telegram, and review every draft before deciding whether to publish.</p>
+          {scheduleDraft && !topicStatus?.schedule.paused && <form className="stack" onSubmit={(event) => void saveSchedule(event)}>
             <label className="checkbox"><input type="checkbox" checked={scheduleDraft.enabled}
               onChange={event => setScheduleDraft({ ...scheduleDraft, enabled: event.target.checked })} /> Send me a weekly invitation in Telegram</label>
             <div className="form-grid">
@@ -449,8 +481,13 @@ export default function App() {
               <label>Timezone<input value={scheduleDraft.timezone} onChange={event => setScheduleDraft({ ...scheduleDraft, timezone: event.target.value })} /></label>
             </div>
             <button disabled={busy}>Save invitation schedule</button>
-            {topicStatus?.schedule.next_at && <p className="muted">Next invitation: {new Date(topicStatus.schedule.next_at).toLocaleString()}</p>}
+            {topicStatus?.schedule.next_at && <p className="muted">Next invitation: {new Intl.DateTimeFormat("en-IN", {
+              dateStyle: "medium", timeStyle: "short", timeZone: topicStatus.schedule.timezone,
+            }).format(new Date(topicStatus.schedule.next_at))} ({topicStatus.schedule.timezone})</p>}
           </form>}
+          {topicStatus?.schedule.paused && <p className="notice" role="status">Weekly invitations are paused. Your current conversation and drafts are saved.</p>}
+          {topicStatus?.schedule.enabled && !topicStatus.schedule.paused && <button className="secondary" disabled={busy} onClick={() => void changeSchedulePause(true)}>Pause weekly invitations</button>}
+          {topicStatus?.schedule.paused && <button className="secondary" disabled={busy} onClick={() => void changeSchedulePause(false)}>Resume weekly invitations</button>}
           <button className="secondary" disabled={busy || !!topicStatus?.workflow || readiness.telegram !== "paired"} onClick={() => void startTopics()}>Find topics now</button>
           {topicNotice && <p className="notice success" role="status">{topicNotice}</p>}
           {topicStatus?.telegram_delivery_uncertain && <p className="notice error" role="alert">A Telegram topic message may not have arrived. Check your bot chat; the app will not resend it automatically.</p>}
@@ -491,14 +528,25 @@ export default function App() {
                 </div>
               </div>}
             </div>}
-            <p className="muted">Continue in your paired Telegram chat. After selecting a topic, reply DRAFT. Send feedback in ordinary words, then reply FINAL for the exact preview. {topicStatus.publishing_enabled ? "A new exact Telegram approval can publish the post." : "Live publishing is currently disabled; approvals are checks only."}</p>
+            <p className="muted">Reply CONTINUE in Telegram for a recap of saved progress. After selecting a topic, reply DRAFT. Send feedback in ordinary words, then reply FINAL for the exact preview. {topicStatus.publishing_enabled ? "Only your new exact Telegram approval can publish the post." : "Live publishing is currently disabled; approvals are checks only."}</p>
           </div>}
           {topicStatus && topicStatus.recent_outcomes.length > 0 && <div className="record">
             <h3>Recent outcomes</h3>
-            {topicStatus.recent_outcomes.map(item => <p key={item._id}>
-              <strong>{label(item.state)}</strong> · {item.selected_topic?.title || "Post"}
-              {item.post_url && <> · <a href={item.post_url} target="_blank" rel="noreferrer">View LinkedIn post</a>{item.post_evidence_source === "owner_reported" ? " (reported by you)" : ""}</>}
-            </p>)}
+            {topicStatus.recent_outcomes.map(item => <div className="record" key={item._id}>
+              <p><strong>{label(item.state)}</strong> · {item.selected_topic?.title || "Post"}
+                {item.updated_at ? ` · ${new Date(item.updated_at).toLocaleDateString()}` : ""}
+                {item.post_url && <> · <a href={item.post_url} target="_blank" rel="noreferrer">View LinkedIn post</a>{item.post_evidence_source === "owner_reported" ? " (reported by you)" : ""}</>}
+              </p>
+              <button className="secondary" disabled={busy} onClick={() => void toggleHistory(item._id)}>{historyDetail?.workflow._id === item._id ? "Hide drafts" : "View drafts"}</button>
+              {historyDetail?.workflow._id === item._id && <div className="stack">
+                {historyDetail.drafts.length === 0 && <p className="muted">No draft was created for this conversation.</p>}
+                {historyDetail.drafts.map(draft => <div className="record" key={draft._id}>
+                  <p><strong>Version {draft.version}</strong>{draft.restored_from ? ` · restored from V${draft.restored_from}` : ""}</p>
+                  <p style={{ whiteSpace: "pre-wrap" }}>{draft.body}</p>
+                  {draft.feedback && <p className="muted">Your feedback: {draft.feedback}</p>}
+                </div>)}
+              </div>}
+            </div>)}
           </div>}
           <button className="secondary" disabled={busy} onClick={() => void loadTopics()}>Refresh topics</button>
         </section>

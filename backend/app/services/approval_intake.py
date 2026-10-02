@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from app.domain.approval import PublicationEnvelope, parse_publish_command
 from app.domain.preview import PendingPreview, approve_preview
 from app.domain.telegram import InboundText, OwnerBinding
-from app.services.topic_workflow import handle_topic_message
+from app.services.topic_workflow import handle_continue_message, handle_topic_message
 from app.services.draft_workflow import handle_draft_message, validate_phase4_command
 
 
@@ -35,6 +35,9 @@ async def process_next_owner_message(db, installation_id: str, publishing_enable
         return None
     command = parse_publish_command(message["text"])
     if command is None:
+        continued = await handle_continue_message(db, message, installation_id)
+        if continued is not None:
+            return continued
         draft_result = await handle_draft_message(db, message, installation_id,
                                                   publishing_enabled=publishing_enabled)
         if draft_result is not None:

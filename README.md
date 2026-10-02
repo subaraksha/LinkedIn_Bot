@@ -102,3 +102,7 @@ In Telegram, send `DRAFT` after selecting a topic, give feedback in ordinary wor
 ### Publishing and recovery (Phase 5)
 
 The default publishing switch remains off. Once enabled for an owner-reviewed live test, a new `FINAL` preview explicitly states that its one-use Telegram command will publish publicly. The worker checks the exact saved draft, account, owner binding, and profile again before a single LinkedIn request. Confirmed posts appear with a link in the dashboard; explicit rejection preserves the draft. If the outcome is uncertain, the app blocks retries and guides the owner through publisher quiescence and an audited outcome resolution. See [Phase 5 status and recovery](docs/phase-5-status.md).
+
+### Pause, resume, and history (Phase 6)
+
+Pause and resume weekly invitations in the dashboard without losing the active conversation. Reply `CONTINUE` in Telegram for a recap of saved progress; if an approval was pending, request a fresh `FINAL` preview afterward. The dashboard lists published, skipped, and discarded cycles and lets you open their draft versions and feedback. Earlier topic choices and explicit feedback from published cycles help guide later suggestions and drafts. See [Phase 6 status](docs/phase-6-status.md).

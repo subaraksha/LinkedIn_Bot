@@ -9,7 +9,8 @@ from pymongo.errors import DuplicateKeyError
 from app.api.connections import bound_database, context
 from app.api.security import require_session
 from app.services.topic_workflow import (
-    TopicWorkflowError, current_workflow, get_schedule, save_schedule, start_workflow,
+    TopicWorkflowError, current_workflow, get_schedule, save_schedule,
+    set_schedule_paused, start_workflow,
 )
 from app.services.publication_recovery import RecoveryError, recovery_status
 
@@ -23,6 +24,11 @@ class ScheduleInput(BaseModel):
     weekday: int = Field(ge=0, le=6)
     local_time: str = Field(min_length=5, max_length=5)
     timezone: str = Field(min_length=3, max_length=80)
+
+
+class PauseInput(BaseModel):
+    expected_revision: int = Field(ge=0)
+    paused: bool
 
 
 @router.get("/status")
@@ -40,7 +46,8 @@ async def status(request: Request):
         history = await db.workflows.find({"installation_id": identity, "active": False,
             "state": {"$in": ["PUBLISHED", "DISCARDED", "SKIPPED"]}},
             {"_id": 1, "state": 1, "selected_topic.title": 1, "post_url": 1,
-             "post_evidence_source": 1, "updated_at": 1}).sort(
+             "post_evidence_source": 1, "created_at": 1, "updated_at": 1,
+             "draft_version": 1}).sort(
                 "updated_at", -1).limit(20).to_list(length=20)
         recovery = None
         if workflow and workflow["state"] == "PUBLISH_UNKNOWN":
@@ -75,6 +82,42 @@ async def update_schedule(request: Request, body: ScheduleInput):
             raise HTTPException(409, str(exc)) from exc
         except DuplicateKeyError:
             raise HTTPException(409, "Schedule changed; refresh before saving") from None
+
+
+@router.put("/schedule/pause")
+async def pause_schedule(request: Request, body: PauseInput):
+    require_session(request, write=True)
+    settings, identity = context()
+    async with bound_database(settings, identity) as db:
+        if not body.paused:
+            connection = await db.connections.find_one({"_id": "telegram",
+                "installation_id": identity, "status": "connected"})
+            if not connection:
+                raise HTTPException(409, "Pair Telegram before resuming invitations")
+        try:
+            return await set_schedule_paused(db, identity, settings.app_timezone,
+                expected_revision=body.expected_revision, paused=body.paused)
+        except TopicWorkflowError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/history/{workflow_id}")
+async def history_detail(request: Request, workflow_id: str):
+    require_session(request)
+    settings, identity = context()
+    async with bound_database(settings, identity) as db:
+        workflow = await db.workflows.find_one({"_id": workflow_id,
+            "installation_id": identity, "kind": "weekly_topics", "active": False,
+            "state": {"$in": ["PUBLISHED", "DISCARDED", "SKIPPED"]}},
+            {"_id": 1, "state": 1, "selected_topic": 1, "perspective": 1,
+             "post_url": 1, "post_evidence_source": 1,
+             "created_at": 1, "updated_at": 1})
+        if not workflow:
+            raise HTTPException(404, "Conversation not found")
+        drafts = await db.draft_versions.find({"workflow_id": workflow_id},
+            {"_id": 1, "version": 1, "body": 1, "feedback": 1,
+             "restored_from": 1, "created_at": 1}).sort("version", 1).limit(50).to_list(length=50)
+        return {"workflow": workflow, "drafts": drafts}
 
 
 @router.post("/start", status_code=201)
