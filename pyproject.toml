@@ -1,0 +1,34 @@
+[project]
+name = "linkedin-post-agent"
+version = "0.1.0"
+description = "Local, single-owner LinkedIn post assistant"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "pydantic-settings>=2.5,<3",
+  "pymongo>=4.10,<5",
+  "google-genai>=1,<2",
+  "httpx>=0.27,<1",
+  "certifi>=2025.1",
+  "keyring>=25,<27",
+]
+
+[project.scripts]
+linkedin-agent-api = "app.main:run"
+linkedin-agent-worker = "app.worker.main:run"
+linkedin-agent-diagnose = "app.cli.diagnose:run"
+linkedin-agent-oauth-probe = "app.cli.linkedin_oauth_probe:run"
+linkedin-agent-connect = "app.cli.linkedin_connect:run"
+linkedin-agent-connection-status = "app.cli.linkedin_connect:status"
+linkedin-agent-telegram-pair = "app.cli.telegram_pair:run"
+linkedin-agent-preview-demo = "app.cli.preview_demo:run"
+linkedin-agent-final-preview = "app.cli.final_preview:run"
+linkedin-agent-mongo-capability-probe = "app.cli.mongo_capability_probe:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/app"]
