@@ -16,17 +16,21 @@ def _now():
 
 
 def _public_source(item):
-    return {key: item[key] for key in ("_id", "kind", "label", "content", "content_hash", "extraction_status", "revision", "created_at", "updated_at") if key in item}
+    result = {key: item[key] for key in ("_id", "kind", "label", "content_hash", "extraction_status", "revision", "created_at", "updated_at") if key in item}
+    result["content"] = item.get("content", "")[:1000]
+    return result
 
 
 def _public_fact(item):
     return {key: item[key] for key in ("_id", "type", "claim", "experience_context", "status", "publication_permission", "evidence", "revision", "created_at", "updated_at") if key in item}
 
 
-async def _bump(db, installation_id, session, now):
+async def _bump(db, installation_id, session, now, *, component="knowledge"):
     owner = await db.owner_settings.update_one(
         {"_id": "owner", "installation_id": installation_id},
-        {"$inc": {"profile_revision": 1, "knowledge_revision": 1, "revision": 1},
+        {"$inc": {"profile_revision": 1,
+                  "preferences_revision" if component == "preferences" else "knowledge_revision": 1,
+                  "revision": 1},
          "$set": {"updated_at": now}}, session=session,
     )
     if owner.matched_count != 1:
@@ -64,6 +68,33 @@ async def add_text_source(db, installation_id: str, label: str, content: str):
             return _public_source(existing)
         raise KnowledgeConflict("Source already exists") from None
     return _public_source(record)
+
+
+async def add_resume_source(db, installation_id: str, kind: str, digest: str,
+                            relative_path: str, sections: list[dict[str, str]]):
+    existing = await db.sources.find_one({"installation_id": installation_id,
+                                          "kind": kind, "content_hash": digest})
+    if existing:
+        return _public_source(existing), False
+    now = _now()
+    content = "\n\n".join(f"[{section['label']}]\n{section['text']}" for section in sections)
+    record = {"_id": str(uuid4()), "installation_id": installation_id, "schema_version": 1,
+              "kind": kind, "label": "Resume", "content": content, "sections": sections,
+              "local_relative_path": relative_path, "content_hash": digest,
+              "parser_version": 1, "source_version": 1, "extraction_status": "not_started",
+              "revision": 1, "created_at": now, "updated_at": now}
+    try:
+        async with db.client.start_session() as session:
+            async with await session.start_transaction():
+                await db.sources.insert_one(record, session=session)
+                await _bump(db, installation_id, session, now)
+    except DuplicateKeyError:
+        existing = await db.sources.find_one({"installation_id": installation_id,
+                                              "kind": kind, "content_hash": digest})
+        if existing:
+            return _public_source(existing), False
+        raise KnowledgeConflict("Source already exists") from None
+    return _public_source(record), True
 
 
 async def add_manual_fact(db, installation_id: str, fact_type: str, claim: str,
@@ -154,7 +185,7 @@ async def save_suggestions(db, installation_id: str, source_id: str, source_hash
     async with db.client.start_session() as session:
         async with await session.start_transaction():
             source = await db.sources.find_one(
-                {"_id": source_id, "installation_id": installation_id, "kind": "linkedin_profile_text",
+                {"_id": source_id, "installation_id": installation_id, "kind": {"$in": ["linkedin_profile_text", "resume_pdf", "resume_docx", "resume_txt"]},
                  "content_hash": source_hash}, session=session)
             if not source:
                 raise KnowledgeConflict("Source changed or was not found")
@@ -170,12 +201,17 @@ async def save_suggestions(db, installation_id: str, source_id: str, source_hash
                 digest = hashlib.sha256(item.claim.casefold().encode()).hexdigest()
                 if digest in suppressed or digest in existing:
                     continue
+                location = next((part["label"] for part in source.get("sections", [])
+                                 if item.quote in part["text"]), None)
+                if source["kind"].startswith("resume_") and location is None:
+                    continue
                 fact = {"_id": str(uuid4()), "installation_id": installation_id, "schema_version": 1,
                         "source_extraction_id": source_id, "source_claim_hash": digest,
                         "type": item.type, "claim": item.claim,
                         "experience_context": item.experience_context,
                         "status": "pending_confirmation", "publication_permission": "private",
-                        "evidence": [{"source_id": source_id, "kind": "linkedin_profile_text", "quote": item.quote}],
+                        "evidence": [{"source_id": source_id, "kind": source["kind"],
+                                      "quote": item.quote, "location": location}],
                         "revision": 1, "created_at": now, "updated_at": now}
                 await db.knowledge_entries.insert_one(fact, session=session)
                 created += 1

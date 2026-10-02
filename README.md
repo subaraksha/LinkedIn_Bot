@@ -67,12 +67,26 @@ For a live phase 0 post, save the exact UTF-8 body in a local ignored file. Set 
 
 Run the Phase 0 checks locally with `uv run python -m unittest discover -s tests -q` and `npm run build --prefix frontend`. The full V1 authoring and recovery workflow is still being built; the live-preview command above is a narrow validation tool.
 
-### Professional information intake (Phase 2, first slice)
+### Professional information intake (Phase 2)
 
 The local dashboard now accepts manually entered facts and pasted LinkedIn profile text. Pasted text is stored as a private source only; it is not automatically extracted into facts. A manually entered fact is marked confirmed because the owner supplied it, but defaults to **private** publication permission. Each fact retains a source reference and can be edited, disputed or confirmed, made public or private, and deleted from active knowledge. Editing records a new owner-statement source for the revised wording. These changes invalidate any waiting publication approval and pending publish job, requiring a new preview.
 
-The app saves these records in the bound MongoDB database. Profile revision increments with each accepted change, ready for the portable export planned later in Phase 2. Resume upload, GitHub intake, automatic extraction, clarification, and export are subsequent slices. Use synthetic data for testing; the opt-in integration test creates and drops a uniquely named temporary database on the configured cluster.
+The app saves these records in the bound MongoDB database. Profile revision increments with each accepted change, and the portable export reflects the current revision. Resume upload, fact suggestions, guided questions, and export are described below. Optional GitHub intake is deferred by the owner. Use synthetic data for testing; the opt-in integration test creates and drops a uniquely named temporary database on the configured cluster.
 
 ### Fact suggestions from saved text
 
 For a saved LinkedIn text source, choose **Suggest facts from this text**. The local backend sends that source text to the configured Gemini model, accepts only structured suggestions with a verbatim quote found in the source, and saves them as `pending_confirmation` and `private`. The dashboard shows the supporting quote and lets the owner confirm, edit, dispute, change publication permission, or delete each suggestion. Repeating the action on a completed source does not create duplicates. The model is never called just by saving a source. A confirmation does not publish a post.
+
+### Resume import
+
+The dashboard accepts PDF, DOCX, or UTF-8 plain text resumes up to 10 MiB. Uploading stores a generated-name original under the ignored, owner-only `APP_DATA_DIR/uploads` directory and saves bounded extracted text with page or section labels in MongoDB. It does not run Gemini or approve publication. Choose **Suggest facts from this source** to send extracted text to Gemini; accepted suggestions remain pending and private, with exact source quotes and page/section labels for review. Scanned PDFs, encrypted files, unsupported formats, malformed files, files without useful text, and over-limit files show an error. A single suggestion pass currently requires at most 100,000 extracted characters; longer parsed resumes remain saved but require a shorter text source for suggestions. The parser runs in a separate process with a wall timeout, CPU limit, and 512 MiB memory limit (supervised RSS on macOS).
+
+### Portable knowledge downloads
+
+The dashboard offers two separate ZIP downloads. **Full knowledge (private)** contains `profile.json`, `profile.md`, `profile.schema.json`, and a checksum `manifest.json`. It includes current confirmed, pending, and disputed facts, privacy labels, source metadata, supporting evidence excerpts, and deletion suppression markers. Original resume files are included only if the owner checks the explicit option. **Public profile** includes only facts that are both confirmed and marked public; it excludes private/pending/disputed facts, source text and excerpts, originals, and suppression markers. The public bundle is an input for a future portfolio, not an automatic publication.
+
+The format is version 1 and its independent schema is published at `docs/profile.schema.json`. Bundle checksums are verified before a ZIP is saved. The latest default full bundle is refreshed after accepted profile changes; if that write fails, the fact change remains saved and the dashboard reports the export as outdated. Downloading generates a fresh committed snapshot. Bundles are written with owner-only permissions under ignored `APP_DATA_DIR/exports` and served only through the local authenticated dashboard. Re-import preview and apply are later Phase 2 work.
+
+### Goals, preferences, and guided questions
+
+The dashboard saves target roles, audience, interests, content goals, tone, length, technical depth, emoji/hashtag choices, styles/phrases/topics to avoid, confidential details, and optional writing samples. It suggests focused questions for missing goals and ambiguous team or learning claims. Answers and skips are durable; answers linked to uncertain facts add private owner evidence while those facts remain pending until confirmed. Preferences and clarification edits increment the profile revision and invalidate waiting publication approvals. The full private export includes these records; the public export includes only safe style settings. Explicit prohibited terms are checked again at final preview and publication preflight. Optional GitHub intake and knowledge re-import are deferred by the owner; see `docs/phase-2-status.md`.

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from app.domain.approval import PublicationEnvelope
 from app.domain.preview import PendingPreview
 from app.services.preview_delivery import PreviewDeliveryError
+from app.services.draft_context import blocked_terms
 
 
 def canonical_post_text(text: str) -> str:
@@ -34,6 +35,10 @@ async def stage_final_preview(
     receiver = await db.telegram_receivers.find_one({"_id": bot_id})
     if not owner or owner.get("installation_id") != installation_id:
         raise PreviewDeliveryError("Owner database binding is unavailable")
+    profile_collection = getattr(db, "owner_profiles", None)
+    profile = await profile_collection.find_one({"_id": "profile", "installation_id": installation_id}) if profile_collection else None
+    if profile and blocked_terms(body, profile["data"]):
+        raise PreviewDeliveryError("Post text contains a saved publication boundary")
     if (not telegram or telegram.get("installation_id") != installation_id
             or telegram.get("bot_id") != bot_id or telegram.get("status") != "connected"):
         raise PreviewDeliveryError("Telegram owner binding is unavailable")

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:linkedin-post-agent:profile:v1",
+  "title": "LinkedIn Post Agent portable owner profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "scope", "profile_revision", "generated_at", "facts", "sources", "clarifications", "goals", "preferences", "suppression_markers"],
+  "properties": {
+    "format_version": {"const": 1},
+    "scope": {"enum": ["full", "public"]},
+    "profile_revision": {"type": "integer", "minimum": 0},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "facts": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "clarifications": {"type": "array", "items": {"type": "object"}},
+    "goals": {"type": "object"},
+    "preferences": {"type": "object"},
+    "suppression_markers": {"type": "array", "items": {"$ref": "#/$defs/suppression"}}
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "kind"],
+      "properties": {
+        "source_id": {"type": "string", "format": "uuid"},
+        "kind": {"type": "string"},
+        "quote": {"type": "string"},
+        "location": {"type": ["string", "null"]}
+      }
+    },
+    "fact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "claim", "status", "publication_permission", "experience_context", "revision", "updated_at", "evidence"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "type": {"enum": ["education", "work", "project", "tool", "achievement", "other"]},
+        "claim": {"type": "string", "minLength": 1},
+        "status": {"enum": ["pending_confirmation", "confirmed", "disputed"]},
+        "publication_permission": {"enum": ["private", "public"]},
+        "experience_context": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 1},
+        "updated_at": {"type": "string", "format": "date-time"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "label", "excerpts", "source_version"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "kind": {"type": "string"},
+        "label": {"type": "string"},
+        "content_hash": {"type": "string"},
+        "source_version": {"type": "integer", "minimum": 1},
+        "parser_version": {"type": "integer", "minimum": 1},
+        "excerpts": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["fact_id", "quote"],
+          "properties": {
+            "fact_id": {"type": "string", "format": "uuid"},
+            "quote": {"type": "string"},
+            "location": {"type": ["string", "null"]}
+          }
+        }}
+      }
+    },
+    "suppression": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "claim_hash"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "claim_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "source_extraction_id": {"type": "string", "format": "uuid"}
+      }
+    }
+  }
+}

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from app.domain.approval import PublicationEnvelope
 from app.integrations.linkedin_posts import PostResult
-from app.services.publication import PublicationError, publish_one, recover_inflight
+from app.services.publication import PublicationError, _preflight, publish_one, recover_inflight
 from app.storage.publication_journal import save_success
 
 
@@ -115,11 +115,24 @@ def fixture():
         "_id": "owner", "installation_id": "install", "next_event_seq": 7,
     }])
     db.runtime_control = Collection()
+    db.owner_profiles = Collection()
     db.publication_attempts = Collection()
     return db
 
 
 class PublicationServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_publication_preflight_blocks_saved_boundary(self):
+        from app.domain.owner_profile import OwnerProfileInput
+        db = fixture()
+        db.owner_profiles.documents["profile"] = {
+            "_id": "profile", "installation_id": "install",
+            "data": OwnerProfileInput(confidential_details=["approved test post"]).model_dump(),
+        }
+        job = db.jobs.documents["publish:approval:workflow"]
+        with self.assertRaisesRegex(PublicationError, "publication boundary"):
+            await _preflight(db, "install", "bot", "lease", job)
+
+
     async def test_restart_after_send_boundary_marks_unknown_without_resend(self):
         db = fixture()
         db.jobs.documents["publish:approval:workflow"]["status"] = "running"

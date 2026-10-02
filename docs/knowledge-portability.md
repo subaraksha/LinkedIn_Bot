@@ -1,6 +1,6 @@
 # Portable owner knowledge — Phase 2 contract
 
-**Status:** Approved design for PRD and architecture revision 1.4; format and schema will be implemented in Phase 2. This file contains no owner profile data.
+**Status:** Approved design for PRD and architecture revision 1.4. Version 1 full/public export bundles and schema are implemented; validated import preview/apply remains future Phase 2 work. This file contains no owner profile data.
 
 ## Purpose and authority
 

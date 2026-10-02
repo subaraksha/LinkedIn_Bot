@@ -7,6 +7,7 @@ from keyring.errors import KeyringError
 from pymongo.errors import PyMongoError
 
 from app.domain.approval import PublicationEnvelope
+from app.services.draft_context import blocked_terms
 from app.integrations.linkedin_posts import (
     PostResult, create_text_post, post_permalink, text_post_payload,
 )
@@ -66,6 +67,10 @@ async def _preflight(db, installation_id: str, bot_id: str, lease_token: str, jo
             or envelope.author_urn != f"urn:li:person:{linkedin['member_id']}"):
         raise PublicationError("Approved envelope no longer matches the destination")
     text_post_payload(envelope)
+    profile_collection = getattr(db, "owner_profiles", None)
+    profile = await profile_collection.find_one({"_id": "profile", "installation_id": installation_id}) if profile_collection else None
+    if profile and blocked_terms(envelope.text, profile["data"]):
+        raise PublicationError("Approved post conflicts with a saved publication boundary")
     try:
         token = keyring.get_password(_service(installation_id), linkedin["secret_ref"])
     except (KeyError, KeyringError) as exc:

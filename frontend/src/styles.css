@@ -17,6 +17,7 @@ li strong { color: #61798a; font-weight: 500; }
 .muted { color: #61798a; }
 .notice { padding: 12px 16px; border-radius: 10px; }
 .error { background: #fff0ee; color: #a03b32; }
+.success { background: #eaf6ee; color: #20683b; }
 .candidate { background: #f4f7fa; border-radius: 10px; padding: 16px; margin: 16px 0; }
 button { background: #176e94; color: white; border: 0; border-radius: 9px; padding: 11px 16px; font: inherit; font-weight: 650; cursor: pointer; }
 button:hover { background: #125a7a; }
@@ -32,3 +33,7 @@ a { color: #176e94; font-weight: 650; }
 .record p { margin: 7px 0; white-space: pre-wrap; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .evidence { background: #f2f7fa; border-left: 3px solid #7ca9bf; padding: 10px 12px; border-radius: 4px; }
+.export-panel { background: #f1f7f9; border: 1px solid #c9dce5; border-radius: 12px; padding: 18px; margin: 20px 0; }
+.export-panel h3 { margin-top: 0; }
+.checkbox { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
