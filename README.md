@@ -1,198 +1,123 @@
 # LinkedIn Post Agent
 
-Local scaffold for the single-owner V1 product. The current release target is one owner installation under PRD and architecture revision 1.4. Read the [PRD](docs/PRD_final.md), [architecture](docs/SystemDesign_Final.md), and [portable knowledge contract](docs/knowledge-portability.md) before Phase 2 work.
+A local, single-owner assistant that turns fresh AI and backend engineering sources into relevant LinkedIn topic ideas, evidence-backed drafts, and owner-approved posts.
 
-## Start the scaffold
+## The problem
 
-1. Install Python 3.12 or 3.13, `uv`, and Node.js. The architecture targets Node.js 22; the frontend scaffold also supports the currently available Node.js 18.
-2. Run `uv sync --locked` and `npm ci --prefix frontend`.
-3. Run `npm run build --prefix frontend`.
-4. Copy `.env.example` to an ignored local `.env`, fill the integration values, and set `APP_TLS_CERT` and `APP_TLS_KEY` to the local certificate and key described below.
-5. Run `uv run linkedin-agent-foundation --apply` to bind the configured owner database.
-6. Run `uv run linkedin-agent-api`, then open the one-use `https://127.0.0.1:8765/bootstrap?...` link printed by the launcher. The clean dashboard URL is shown after the link is consumed.
+Finding something useful to share takes more than following the latest news. Topics can be too generic or too advanced for the author's experience, drafts can sound impersonal, and useful engineering solutions can get lost behind jargon or product announcements. Keeping sources, personal context, revisions, and publication decisions together adds more manual work.
 
-The dashboard shows missing variable names only, never values. The worker entry point is `uv run linkedin-agent-worker`; after owner pairing, it receives and durably stores direct owner messages. Publication remains off while `PUBLISHING_ENABLED=false`.
+## Our solution
 
-The API serves the built dashboard over local HTTPS. The launcher link establishes a twelve-hour browser session; restart the API to issue another one-use link after logging out or expiry. Dashboard writes require that session and a request token. The API exposes `/api/health` without private data and protects `/api/readiness`. After editing the frontend, rebuild it with `npm run build --prefix frontend` and reload the local HTTPS dashboard; account setup is intentionally bound to that origin.
+The agent combines public-source discovery with an editable professional profile. It selects topics that fit the owner's current work and audience, explains the ideas in plain language, and drafts posts around practical problems and approaches. A local dashboard manages information and progress; Telegram handles topic choices, feedback, and final approval.
 
-The dashboard can now start Telegram pairing, display the private-chat candidate, and confirm the numeric owner account. It can also start LinkedIn authorization using the registered callback while the dashboard is running. After pairing, start the separate local receiver with `uv run linkedin-agent-worker`; the dashboard reports whether its lease is active. Connecting accounts does not publish anything. The earlier CLI flows remain available for diagnostics.
+```text
+HN + GitHub + RSS → discovery and evidence → persona-led topic selection
+    → owner perspective → source-grounded draft → review → exact approval → LinkedIn
+```
 
-## Phase 1 database foundation
+Research and authoring use Gemini. Collection, scheduling, scoring, job recovery, and publication controls use ordinary Python services.
 
-Run `uv run linkedin-agent-foundation --apply` after setting the MongoDB values in the ignored `.env`. It binds the configured database to this installation, fills missing owner metadata without replacing existing values, and creates the unique and lookup indexes needed for later features. The operation is repeatable. A conflicting owner binding or duplicate record stops setup instead of silently discarding data. The configured database is the only database changed by this command.
+## Features and capabilities
 
-The job store in `backend/app/storage/jobs.py` supports durable enqueue, duplicate suppression, lease claims, stale-worker rejection, and lease recovery. Future research and draft jobs will use it; the existing Phase 0 publication path keeps its separate one-shot send rules.
+- **Fresh discovery:** Hacker News stories, recently active GitHub repositories, and configurable RSS feeds, including LangChain, Hugging Face, Outcome School, OpenAI, Cloudflare, and engineering blogs. Collection runs every six hours while a collector is running, with manual refresh and visible job status.
+- **Personal topic selection:** Uses career context, recent work, audience, interests, and rejection reasons. Returns one to five suitable suggestions with a simple explanation, reader takeaway, and source links. Personal fit and practical value carry more weight than popularity.
+- **Practical writing:** New source-backed drafts first extract the problem, approach, and limitations. Writing preferences guide tone, length, technical depth, examples, emojis, and hashtags; writing samples guide voice without becoming evidence for personal claims.
+- **Knowledge management:** Resume intake for PDF, DOCX, and text; manual facts; pasted profile text; source-backed fact suggestions; and guided questions. Suggested facts require confirmation and default to private. Download full private knowledge or a filtered public profile.
+- **Review and history:** Choose or switch topics, request alternatives, revise drafts in ordinary language, restore versions from the current topic selection, and view past conversations. Switching topics preserves history while resetting input and invalidating old approvals.
+- **Controlled publication:** LinkedIn OAuth, an exact final preview, and a one-use Telegram approval tied to the post version and account. Publishing is disabled by default. Uncertain publication results require review rather than automatic resend.
 
-To repeat the foundation integration check without touching the owner database, run `RUN_MONGO_INTEGRATION=1 uv run python -m unittest tests.test_foundation_integration -q`. It creates and removes a uniquely named temporary database on the configured cluster.
+## Engineering highlights
 
-Starting the API does not send a Telegram message or publish to LinkedIn. Opening the dashboard checks connection status. The Phase 0 probes below include read-only provider checks and writes confined to a uniquely named temporary MongoDB database. Gate status is tracked in [integration validation](docs/integration-validation.md).
+- **Evidence survives generation:** Saved source snapshots support drafting and grounding checks; confirmed public facts are separated from private or unconfirmed knowledge.
+- **Refresh has a dependency:** Topic generation waits for queued discovery. Regeneration linked to a failed refresh reports the failure rather than silently using older evidence.
+- **Work survives restarts:** MongoDB-backed jobs use duplicate suppression, leases, and revision checks. Restarting a worker invalidates pending approvals.
+- **Persona stays editable:** Each generation reads saved profile context rather than hardcoding the owner's resume into model instructions. Confidential terms are checked in suggestions, drafts, and publication controls.
 
-## Phase 0 probes
+Trend scores use recency, normalized engagement, and changes between observations. Topic ranking combines model-assessed personal fit (60%), practical value (25%), and trend signal (15%). These scores and grounding audits are heuristics; owner review remains essential.
 
-Run `uv run linkedin-agent-diagnose --live-model` to check the configured MongoDB connection, Telegram bot identity/webhook, saved LinkedIn connection, and two small synthetic Gemini requests. It prints no credentials and does not send a Telegram message or write a LinkedIn post. Then run `uv run linkedin-agent-mongo-capability-probe` to check majority writes, a unique index, transaction rollback, durable Telegram ingress, duplicate rejection, and restart invalidation in a uniquely named temporary database on the configured cluster. It removes only its temporary collections and never writes to the active owner database.
+## Tools and technology
 
-The local LinkedIn OAuth callback probe is `uv run linkedin-agent-oauth-probe`. Register **exactly** `https://127.0.0.1:8765/api/v1/connections/linkedin/callback` in the LinkedIn developer app and set the same value for `LINKEDIN_REDIRECT_URI` in the ignored local `.env`. The probe needs `APP_TLS_CERT` and `APP_TLS_KEY` pointing to a certificate/key for 127.0.0.1. To create a local certificate with that address in its subject alternative names:
+| Area | Stack |
+| --- | --- |
+| Backend | Python 3.12–3.13, FastAPI, Uvicorn, Pydantic |
+| Dashboard | React, TypeScript, Vite |
+| Storage and background work | MongoDB/PyMongo, durable Python job worker |
+| AI | Gemini through the Google Gen AI SDK |
+| Discovery and extraction | HTTPX, Feedparser, Trafilatura, HN and GitHub APIs |
+| Documents and credentials | PyPDF, python-docx, OS keyring |
+| Owner interaction and publishing | Telegram Bot API, LinkedIn OAuth and Posts API |
+
+## Setup
+
+### 1. Install and configure
+
+Install Python 3.12 or 3.13, `uv`, Node.js 22, and npm. Have a transaction-capable MongoDB deployment, such as Atlas or a replica set, a Gemini key, and a Telegram bot. LinkedIn connection/publishing requires a developer app with the necessary product access.
+
+```sh
+uv sync --locked
+npm ci --prefix frontend
+npm run build --prefix frontend
+cp .env.example .env
+```
+
+Fill `.env` with MongoDB, Gemini, Telegram, and LinkedIn settings. Set a supported `GEMINI_MODEL` and `LINKEDIN_API_VERSION`; keep `PUBLISHING_ENABLED=false` for initial testing. `GITHUB_TOKEN` is optional and increases discovery API limits. Set `APP_TIMEZONE` to your local IANA timezone, for example `Asia/Kolkata`.
+
+### 2. Configure local HTTPS
+
+The dashboard uses `https://127.0.0.1:8765`. Create a local certificate:
 
 ```sh
 mkdir -p .local-data/tls
 openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 365 \
-  -keyout .local-data/tls/localhost.key -out .local-data/tls/localhost.crt \
-  -subj "/CN=localhost" -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"
+  -keyout .local-data/tls/localhost.key \
+  -out .local-data/tls/localhost.crt \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"
 chmod 600 .local-data/tls/localhost.key
 ```
 
-Trust `.local-data/tls/localhost.crt` using macOS Keychain Access before following the browser authorization link; do not bypass a browser certificate warning. Keep the private key local. The probe displays a one-use authorization URL, validates the callback and member identity, and discards the access token. It does not save a LinkedIn connection or publish. Keep the authorization URL and terminal output private.
+Trust the certificate using your OS certificate store (Keychain Access on macOS). Set `APP_TLS_CERT` and `APP_TLS_KEY` to these paths. Register this exact LinkedIn callback and use it for `LINKEDIN_REDIRECT_URI`:
 
-The exact callback registration and certificate trust must be checked on the owner’s computer. Postman OAuth success does not prove the local callback works.
+```text
+https://127.0.0.1:8765/api/v1/connections/linkedin/callback
+```
 
-## Save a LinkedIn connection
+### 3. Start the application
 
-Use the dashboard's Connect LinkedIn button while the main API is running. The callback checks the dashboard browser session and one-use state, retrieves the account identity, stores the access token in the OS credential store, and saves only connection metadata in the configured MongoDB database. It does not publish. The sign-in link expires after ten minutes. The older `uv run linkedin-agent-connect` command remains available if the main API is stopped, because both flows use the same callback port.
+```sh
+uv run linkedin-agent-foundation --apply
+uv run linkedin-agent-api
+```
 
-Run `uv run linkedin-agent-connection-status` to check the saved connection without displaying the token. The dashboard's setup status also shows whether LinkedIn is connected or needs reconnection. A different LinkedIn member is rejected during reconnect; account switching needs an explicit migration flow so pending approvals cannot silently change destination.
+Open the one-use dashboard link printed by the launcher. In the dashboard, pair your Telegram account, connect LinkedIn, and review your professional information, public facts, writing preferences, and confidential details. Start the worker in another terminal:
 
-## Pair the owner Telegram account
+```sh
+uv run linkedin-agent-worker
+```
 
-Run `uv run linkedin-agent-telegram-pair start`. It verifies the configured bot and that no webhook is active, then prints a one-use `t.me` link. Open that link from the intended owner's Telegram account and press Start. The command records a candidate and exits; it does **not** pair the account. Check the displayed numeric user ID and name against your own Telegram account. Run `uv run linkedin-agent-telegram-pair status` to review the candidate again. Only after that local owner check, run `uv run linkedin-agent-telegram-pair confirm <numeric-user-id>`.
+For discovery without Telegram, run `uv run linkedin-agent-discover` instead; it does not handle drafting or publication. Keep the machine and relevant processes running for background work. After frontend changes, rebuild the dashboard; after backend changes, restart the affected processes.
 
-The pairing challenge expires after ten minutes. The receiver saves each update and its next polling offset together in MongoDB before acknowledging it to Telegram. It uses a short database lease to reject a competing receiver. Pairing is now available from the authenticated dashboard; the older CLI is retained for diagnostics.
+## Everyday workflow
 
-After pairing, `uv run linkedin-agent-worker` starts the direct long-poll receiver. It verifies the bot and owner binding, marks a restart as an approval barrier, and stores accepted owner text with the update ledger and polling cursor in one transaction. Rejected updates retain only minimal metadata. With publication disabled, saved approval commands are rejected. Stop it with Ctrl+C.
+1. Refresh discovery and wait for completion. Use **Find topics now**, or **Regenerate suggestions** when an unselected conversation is already open.
+2. In Telegram, send `TOPICS`, then `CHOOSE <number>`. Refreshed lists use `CHOOSE <list revision>:<number>`. Add your perspective and indicate hands-on experience or exploration.
+3. Send `DRAFT`, then give feedback in ordinary language. Use `CHOOSE` to switch topics before publication or `RESTORE <version>` for an eligible earlier draft.
+4. Send `FINAL` to review the exact post. With publishing enabled, only the exact approval command shown in that preview authorizes publication. With publishing disabled, approval checks do not publish.
 
-The exact preview approval contract checks changed text, account, version, challenge, delivery state, owner binding, and receiver epoch. The worker can process an approval only for an active, fully delivered final preview while `PUBLISHING_ENABLED=true`. A restart invalidates the challenge. The publisher records a durable one-shot send boundary and never automatically retries an uncertain LinkedIn outcome.
+Use **Save topic preference** to explain mismatches such as “too advanced” or “too promotional.” Weekly invitations can be scheduled, paused, or resumed. `CONTINUE` recaps saved progress; `DISCARD` or `SKIP WEEK` closes a conversation.
 
-Run `uv run linkedin-agent-preview-demo` to send one explicitly labeled dry-run preview to the paired Telegram chat. It stores the fixture draft and three ordered outbound messages before sending. The complete body is a separate plain-text message; the final notice is sent only after the body receives a Telegram message ID. An uncertain send is recorded and never automatically retried. This demo creates no approval challenge and cannot call LinkedIn.
+## Verification and current scope
 
-For a live phase 0 post, save the exact UTF-8 body in a local ignored file. Set `PUBLISHING_ENABLED=true`, start the paired worker, then run `uv run linkedin-agent-final-preview --live <post-file>`. This sends an account and public audience notice, the exact body, and a one-use command to Telegram. Only the paired owner can send that command from the private chat. The command approves immediate public publication; an unapproved preview never reaches LinkedIn. Check the exact account and body in Telegram before sending it. If LinkedIn's result is uncertain, inspect the profile before any fresh preview.
+```sh
+uv run python -m unittest discover -s tests -q
+npm run build --prefix frontend
+uv run linkedin-agent-diagnose --live-model
+```
 
-Run the Phase 0 checks locally with `uv run python -m unittest discover -s tests -q` and `npm run build --prefix frontend`. The full V1 authoring and recovery workflow is still being built; the live-preview command above is a narrow validation tool.
+The diagnostic command checks provider connectivity and makes small synthetic Gemini requests. MongoDB integration tests are opt-in and require access to a disposable test database; the default suite skips them.
 
-### Professional information intake (Phase 2)
+The app runs locally, but generation sends relevant profile context and source evidence to Gemini. Resume fact extraction sends the selected source text when explicitly requested. Keep credentials, certificates, uploads, and private exports out of Git.
 
-The local dashboard now accepts manually entered facts and pasted LinkedIn profile text. Pasted text is stored as a private source only; it is not automatically extracted into facts. A manually entered fact is marked confirmed because the owner supplied it, but defaults to **private** publication permission. Each fact retains a source reference and can be edited, disputed or confirmed, made public or private, and deleted from active knowledge. Editing records a new owner-statement source for the revised wording. These changes invalidate any waiting publication approval and pending publish job, requiring a new preview.
+Current scope is a single owner and text posts. Semantic topic clustering, Reddit/search adapters, Firecrawl fallback, GitHub profile knowledge intake, and knowledge re-import are deferred. Source failures can reduce coverage, and generated writing still needs human review.
 
-The app saves these records in the bound MongoDB database. Profile revision increments with each accepted change, and the portable export reflects the current revision. Resume upload, fact suggestions, guided questions, and export are described below. Optional GitHub intake is deferred by the owner. Use synthetic data for testing; the opt-in integration test creates and drops a uniquely named temporary database on the configured cluster.
-
-### Fact suggestions from saved text
-
-For a saved LinkedIn text source, choose **Suggest facts from this text**. The local backend sends that source text to the configured Gemini model, accepts only structured suggestions with a verbatim quote found in the source, and saves them as `pending_confirmation` and `private`. The dashboard shows the supporting quote and lets the owner confirm, edit, dispute, change publication permission, or delete each suggestion. Repeating the action on a completed source does not create duplicates. The model is never called just by saving a source. A confirmation does not publish a post.
-
-### Resume import
-
-The dashboard accepts PDF, DOCX, or UTF-8 plain text resumes up to 10 MiB. Uploading stores a generated-name original under the ignored, owner-only `APP_DATA_DIR/uploads` directory and saves bounded extracted text with page or section labels in MongoDB. It does not run Gemini or approve publication. Choose **Suggest facts from this source** to send extracted text to Gemini; accepted suggestions remain pending and private, with exact source quotes and page/section labels for review. Scanned PDFs, encrypted files, unsupported formats, malformed files, files without useful text, and over-limit files show an error. A single suggestion pass currently requires at most 100,000 extracted characters; longer parsed resumes remain saved but require a shorter text source for suggestions. The parser runs in a separate process with a wall timeout, CPU limit, and 512 MiB memory limit (supervised RSS on macOS).
-
-### Portable knowledge downloads
-
-The dashboard offers two separate ZIP downloads. **Full knowledge (private)** contains `profile.json`, `profile.md`, `profile.schema.json`, and a checksum `manifest.json`. It includes current confirmed, pending, and disputed facts, privacy labels, source metadata, supporting evidence excerpts, and deletion suppression markers. Original resume files are included only if the owner checks the explicit option. **Public profile** includes only facts that are both confirmed and marked public; it excludes private/pending/disputed facts, source text and excerpts, originals, and suppression markers. The public bundle is an input for a future portfolio, not an automatic publication.
-
-The format is version 1 and its independent schema is published at `docs/profile.schema.json`. Bundle checksums are verified before a ZIP is saved. The latest default full bundle is refreshed after accepted profile changes; if that write fails, the fact change remains saved and the dashboard reports the export as outdated. Downloading generates a fresh committed snapshot. Bundles are written with owner-only permissions under ignored `APP_DATA_DIR/exports` and served only through the local authenticated dashboard. Re-import preview and apply are later Phase 2 work.
-
-### Goals, preferences, and guided questions
-
-The dashboard saves target roles, audience, interests, content goals, tone, length, technical depth, emoji/hashtag choices, styles/phrases/topics to avoid, confidential details, and optional writing samples. It suggests focused questions for missing goals and ambiguous team or learning claims. Answers and skips are durable; answers linked to uncertain facts add private owner evidence while those facts remain pending until confirmed. Preferences and clarification edits increment the profile revision and invalidate waiting publication approvals. The full private export includes these records; the public export includes only safe style settings. Explicit prohibited terms are checked again at final preview and publication preflight. Optional GitHub intake and knowledge re-import are deferred by the owner; see `docs/phase-2-status.md`.
-
-### Weekly topics (Phase 3)
-
-The dashboard can start topic research immediately or save an optional weekly Telegram invitation schedule. Invitations are off by default. The worker gathers bounded public-feed evidence, asks Gemini for four or five source-linked topic options, and lets the paired owner choose, request alternatives, provide an idea, or skip in Telegram. It then saves the owner's perspective and whether they have hands-on experience or are exploring the topic. Phase 3 ends at `READY_FOR_DRAFT`. See [Phase 3 status and commands](docs/phase-3-status.md) and edit [research sources](config/research-sources.json) to change the feeds.
-
-### Drafts and approval check (Phase 4)
-
-In Telegram, send `DRAFT` after selecting a topic, give feedback in ordinary words to create immutable new versions, use `RESTORE <version>` to copy an older version forward, and send `FINAL` for an exact three-part preview. The dashboard shows draft history. The preview command checks approval only: it records a `validated_only` receipt and never creates a LinkedIn publishing job. Phase 5 requires a fresh preview and approval. See [Phase 4 status and commands](docs/phase-4-status.md).
-
-### Publishing and recovery (Phase 5)
-
-The default publishing switch remains off. Once enabled for an owner-reviewed live test, a new `FINAL` preview explicitly states that its one-use Telegram command will publish publicly. The worker checks the exact saved draft, account, owner binding, and profile again before a single LinkedIn request. Confirmed posts appear with a link in the dashboard; explicit rejection preserves the draft. If the outcome is uncertain, the app blocks retries and guides the owner through publisher quiescence and an audited outcome resolution. See [Phase 5 status and recovery](docs/phase-5-status.md).
-
-### Pause, resume, and history (Phase 6)
-
-Pause and resume weekly invitations in the dashboard without losing the active conversation. Reply `CONTINUE` in Telegram for a recap of saved progress; if an approval was pending, request a fresh `FINAL` preview afterward. The dashboard lists published, skipped, and discarded cycles and lets you open their draft versions and feedback. Earlier topic choices and explicit feedback from published cycles help guide later suggestions and drafts. See [Phase 6 status](docs/phase-6-status.md).
-
-
-### Trend discovery (stages 1–2)
-
-The worker now collects Hacker News top/new stories, recently active GitHub repositories,
-and configured engineering RSS feeds every six hours. Collection starts when the worker
-starts and continues without an active topic conversation. The machine and process must
-remain running; missed windows are coalesced into the current window after restart.
-For collection without Telegram, run `uv run linkedin-agent-discover` instead. Both
-collectors use the same durable job claims; normally run only one collector.
-
-The dashboard's **Refresh discovery sources** button queues a bounded collection pass
-(manual requests are coalesced within fifteen minutes). A running collector is required.
-**Find topics now** uses candidates collected within seven hours, or performs bounded
-collection when insufficient cached evidence exists. Suggestions retain source snapshots
-for drafting and show an experimental trend ranking. Gemini matches suggestions to the
-saved owner profile and aims for balanced AI/backend coverage when evidence supports it.
-
-Edit `config/research-sources.json` to change feeds or disable `hackernews_enabled` and
-`github_enabled`. `lookback_days` now limits dated feed articles and HN stories; undated
-items remain eligible but receive no recency credit. `evergreen_days` is retained for
-configuration compatibility and is not used by this fresh-topic pipeline. GitHub searches
-include established, recently active repositories; push dates do not imply releases.
-Optionally set `GITHUB_TOKEN` in the ignored `.env` for higher API limits. Never put tokens
-in source configuration. Rate-limited GitHub collection stops for that pass while other
-sources remain usable.
-
-Collection is capped at 40 candidates, with capacity shared across sources. Extraction
-remains capped at 12 pages and uses the existing public-address checks, pinned requests,
-size limits and same-domain redirect restrictions. Tracking query parameters and fragments
-are removed before URL deduplication; multiple signals for one URL retain separate histories.
-
-Engagement observations measure changes between collection passes, rather than lifetime
-engagement divided by age. Rankings normalize engagement logarithmically within each
-provider and combine it with recency and measured velocity. Missing velocity is explicitly
-unknown until another observation exists. RSS ranks by recency. Scores are heuristics,
-not probabilities or comparable evidence of adoption; no semantic clustering or independent
-cross-source topic score is implemented yet. Relevance remains Gemini-based, not numeric.
-
-The collector creates separate history/retention indexes without changing the existing
-foundation migration checksum. Candidate and engagement histories expire after 90 days;
-source snapshots used by drafts remain intact. Failed collection passes retain durable job
-status; the next scheduled or manual pass can retry. Source failures degrade gracefully;
-an entirely empty pass fails rather than replacing saved evidence.
-
-Owner-authenticated endpoints: `POST /api/v1/topics/discovery/refresh` queues collection;
-`GET /api/v1/topics/discovery` returns up to ten recently collected ranked items and the
-latest collection job status. Reddit, Brave, Firecrawl and embeddings are deferred.
-
-The dashboard polls discovery status every fifteen seconds and shows queued, running,
-completed and failed refreshes with a timestamp. Topic research remains unclaimed while
-any discovery pass is pending or running, so waiting consumes neither research retries nor
-its lease. Dashboard regeneration records the relevant refresh job as a dependency; if it
-fails, research reports the failure instead of silently generating from older cached data.
-Retry discovery and then regenerate suggestions. The collector must remain running.
-
-During drafting and review, reply TOPICS to see the saved shortlist and CHOOSE <number>
-to switch topics (use CHOOSE <list revision>:<number> for refreshed shortlists). Switching
-clears the current topic's perspective, experience, draft pointer and approval, cancels
-queued work, and returns to input for the new topic. Earlier draft versions stay in history
-but cannot be restored into a different topic selection. An in-flight or uncertain LinkedIn
-publication must be resolved before switching.
-
-
-### Persona-led topics and plain-language drafts
-
-Topic selection now receives sanitized content goals, career context, audience, technical
-level, style preferences, writing samples and saved rejection reasons. Public suggestions
-include a plain-language explanation and a reader takeaway. Model-assessed persona fit
-(60%) and practical value (25%) outweigh the trend signal (15%); these are heuristic
-ratings, not measured confidence. Candidates below the fit/usefulness thresholds are
-rejected. A shortlist can contain one to five topics instead of padding to four weak ideas.
-Configured profile privacy terms are enforced on suggestions as well as drafts.
-
-New source-backed drafts first extract a cited problem/approach/limitations brief, then
-write from that brief and the original evidence. This adds one model request for new drafts;
-revisions keep their existing wording-preservation rules and do not repeat this step.
-Writing instructions favor practical solutions, plain language and illustrative examples
-when helpful, with provider attribution separated from promotional language. Source excerpts
-are capped at 8,000 characters; the existing grounding audit remains in place. Writing samples
-are used for voice only, never as evidence of personal experience. LangChain's public RSS feed
-is included among discovery sources.
-
-Use **Save topic preference** in the dashboard to record reasons such as too advanced,
-not relevant to current work, or too promotional. The newest twenty preferences guide
-future topic selection. The owner-authenticated `POST /api/v1/topics/feedback` endpoint
-stores the reason locally. Sanitized profile context, relevant feedback and source text are
-sent to the configured Gemini service for generation; confidential terms are excluded from
-persona context. General work context guides selection without authorizing invented
-first-person claims. Previously generated suggestions/drafts are not rewritten automatically.
+For implementation details, see the [system design](docs/SystemDesign_Final.md), [knowledge portability contract](docs/knowledge-portability.md), [publishing and recovery](docs/phase-5-status.md), and [pause, resume, and history](docs/phase-6-status.md). Discovery sources and collection limits are editable in [research-sources.json](config/research-sources.json).
