@@ -28,7 +28,8 @@ type OwnerProfile = {
 };
 type ListField = "target_roles" | "interests" | "content_goals" | "avoid_phrases" | "avoid_styles" | "avoid_topics" | "confidential_details" | "writing_samples";
 type Question = { id: string; kind: string; prompt: string; fact_id: string | null; status: string; answer: string | null; revision: number };
-type Topic = { title: string; why_now: string; why_you: string; angle: string; sources: { url: string; title: string }[] };
+type Topic = { trend_score?: number; title: string; why_now: string; why_you: string; angle: string; sources: { url: string; title: string }[] };
+type DiscoveryStatus = { timezone?: string; job: { _id: string; status: string; updated_at: string; error_code?: string | null } | null };
 type TopicStatus = { schedule: { enabled: boolean; paused: boolean; weekday: number; local_time: string; timezone: string; next_at: string | null; revision: number };
   telegram_delivery_uncertain: boolean;
   publishing_enabled: boolean;
@@ -38,11 +39,11 @@ type TopicStatus = { schedule: { enabled: boolean; paused: boolean; weekday: num
     draft_version?: number }[];
   recovery: { attempt_id: string; workflow_revision: number; result_reason?: string;
     quiesced: boolean; error?: string } | null;
-  workflow: { _id: string; state: string; shortlist_revision: number; shortlist: Topic[]; selected_topic: Topic | null;
+  workflow: { _id: string; revision: number; state: string; shortlist_revision: number; shortlist: Topic[]; selected_topic: Topic | null;
     perspective: string | null; experience: string; draft_error?: string | null;
     publication_error?: string | null; post_url?: string | null;
     draft_version?: number; error?: string | null } | null };
-type HistoryDetail = { workflow: { _id: string; state: string; perspective?: string | null;
+type HistoryDetail = { workflow: { _id: string; revision: number; state: string; perspective?: string | null;
   selected_topic?: { title: string }; post_url?: string | null };
   drafts: { _id: string; version: number; body: string; feedback?: string | null;
     restored_from?: number }[] };
@@ -71,6 +72,8 @@ export default function App() {
   const [questionNotice, setQuestionNotice] = useState<string | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({});
+  const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [topicStatus, setTopicStatus] = useState<TopicStatus | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<TopicStatus["schedule"] | null>(null);
   const [topicNotice, setTopicNotice] = useState<string | null>(null);
@@ -120,6 +123,15 @@ export default function App() {
     setProfileDraft((await response.json()) as OwnerProfile);
   }, []);
 
+  const loadDiscovery = useCallback(async () => {
+    try {
+      const response = await fetch("/api/v1/topics/discovery", { credentials: "same-origin" });
+      if (!response.ok) throw new Error("Could not check source refresh progress. Try refreshing this page.");
+      setDiscoveryStatus(await response.json() as DiscoveryStatus);
+      setDiscoveryError(null);
+    } catch (cause) { setDiscoveryError((cause as Error).message); }
+  }, []);
+
   const loadTopics = useCallback(async () => {
     const response = await fetch("/api/v1/topics/status", { credentials: "same-origin" });
     if (!response.ok) throw new Error("Could not load weekly topics");
@@ -141,16 +153,16 @@ export default function App() {
       })
       .then(({ csrf: value }) => {
         setCsrf(value);
-        return Promise.all([load(), loadPairing(), loadKnowledge(), loadOwnerProfile(), loadTopics()]);
+        return Promise.all([load(), loadPairing(), loadKnowledge(), loadOwnerProfile(), loadTopics(), loadDiscovery()]);
       })
       .catch((cause: Error) => setError(cause.message));
-  }, [load, loadPairing, loadKnowledge, loadOwnerProfile, loadTopics]);
+  }, [load, loadPairing, loadKnowledge, loadOwnerProfile, loadTopics, loadDiscovery]);
 
   useEffect(() => {
     if (!csrf) return;
-    const timer = window.setInterval(() => { void loadTopics().catch(() => undefined); }, 15000);
+    const timer = window.setInterval(() => { void loadTopics().catch(() => undefined); void loadDiscovery(); }, 15000);
     return () => window.clearInterval(timer);
-  }, [csrf, loadTopics]);
+  }, [csrf, loadTopics, loadDiscovery]);
 
   useEffect(() => {
     if (pairing?.status !== "waiting" || !csrf) return;
@@ -347,6 +359,27 @@ export default function App() {
     finally { setBusy(false); }
   }
 
+  async function refreshDiscovery() {
+    setBusy(true); setError(null);
+    try {
+      await post("/api/v1/topics/discovery/refresh");
+      await loadDiscovery();
+      setTopicNotice(null);
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function regenerateTopics() {
+    if (!topicStatus?.workflow) return;
+    setBusy(true); setError(null); setTopicNotice(null);
+    try {
+      await post("/api/v1/topics/regenerate", { expected_revision: topicStatus.workflow.revision });
+      await loadTopics();
+      setTopicNotice(null);
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+
   async function startTopics() {
     setBusy(true); setError(null); setTopicNotice(null);
     try {
@@ -488,7 +521,26 @@ export default function App() {
           {topicStatus?.schedule.paused && <p className="notice" role="status">Weekly invitations are paused. Your current conversation and drafts are saved.</p>}
           {topicStatus?.schedule.enabled && !topicStatus.schedule.paused && <button className="secondary" disabled={busy} onClick={() => void changeSchedulePause(true)}>Pause weekly invitations</button>}
           {topicStatus?.schedule.paused && <button className="secondary" disabled={busy} onClick={() => void changeSchedulePause(false)}>Resume weekly invitations</button>}
-          <button className="secondary" disabled={busy || !!topicStatus?.workflow || readiness.telegram !== "paired"} onClick={() => void startTopics()}>Find topics now</button>
+          {topicStatus?.workflow && ["AWAITING_TOPIC", "RESEARCH_FAILED"].includes(topicStatus.workflow.state) && !topicStatus.workflow.selected_topic ?
+            <button className="secondary" disabled={busy} onClick={() => void regenerateTopics()}>Regenerate suggestions</button> :
+            <button className="secondary" disabled={busy || !!topicStatus?.workflow || readiness.telegram !== "paired"} onClick={() => void startTopics()}>Find topics now</button>}
+          {topicStatus?.workflow?.state === "RESEARCH_PENDING" && <p className="muted" role="status">{["pending", "running"].includes(discoveryStatus?.job?.status || "") ? "Waiting for source refresh to finish before generating suggestions…" : "Finding topic suggestions… This page updates automatically."}</p>}
+          {topicStatus?.workflow?.selected_topic && <p className="muted">Finish or discard your current post in Telegram before starting a new topic conversation.</p>}
+          {!topicStatus?.workflow && readiness.telegram !== "paired" && <p className="muted">Pair Telegram to start a topic conversation.</p>}
+          <button className="secondary" disabled={busy || ["pending", "running"].includes(discoveryStatus?.job?.status || "")} onClick={() => void refreshDiscovery()}>Refresh discovery sources</button>
+          {discoveryError && <p className="notice error" role="alert">{discoveryError}</p>}
+          {discoveryStatus?.job && <p className={`notice ${discoveryStatus.job.status === "failed" ? "error" : ""}`} role="status">
+            {discoveryStatus.job.status === "pending" && "Source refresh queued. Keep the collector running; suggestions will wait for it."}
+            {discoveryStatus.job.status === "running" && "Refreshing discovery sources…"}
+            {discoveryStatus.job.status === "succeeded" && "Source refresh complete. Fresh sources are ready for topic suggestions."}
+            {discoveryStatus.job.status === "failed" && "Source refresh failed. Retry the source refresh before regenerating suggestions."}
+            {" · "}{new Intl.DateTimeFormat("en-IN", {
+              timeZone: discoveryStatus.timezone || "Asia/Kolkata",
+              day: "numeric", month: "short", year: "numeric",
+              hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+            }).format(new Date(discoveryStatus.job.updated_at.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(discoveryStatus.job.updated_at)
+              ? discoveryStatus.job.updated_at : discoveryStatus.job.updated_at + "Z"))}
+          </p>}
           {topicNotice && <p className="notice success" role="status">{topicNotice}</p>}
           {topicStatus?.telegram_delivery_uncertain && <p className="notice error" role="alert">A Telegram topic message may not have arrived. Check your bot chat; the app will not resend it automatically.</p>}
           {topicStatus?.workflow && <div className="record">
@@ -501,6 +553,7 @@ export default function App() {
             {topicStatus.workflow.shortlist.map((topic, index) => <div className="record" key={`${topic.title}-${index}`}>
               <h3>{index + 1}. {topic.title}</h3>
               <p><strong>Why now:</strong> {topic.why_now}</p>
+              {topic.trend_score !== undefined && <p className="muted">Trend ranking: {topic.trend_score}/100 · experimental score</p>}
               <p><strong>Why it fits:</strong> {topic.why_you}</p>
               <p><strong>Possible angle:</strong> {topic.angle}</p>
               <p>Sources: {topic.sources.map((source, sourceIndex) => <span key={source.url}>{sourceIndex > 0 ? ", " : ""}<a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></span>)}</p>

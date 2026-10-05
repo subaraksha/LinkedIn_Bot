@@ -209,6 +209,10 @@ def format_shortlist(workflow: dict) -> str:
 
 async def run_research_job(db, installation_id: str, api_key: str, model: str,
                            worker_id: str) -> bool:
+    # Leave research unclaimed while discovery runs: waiting must not consume retries or leases.
+    if await db.jobs.find_one({"kind": "discover_trends", "payload.installation_id": installation_id,
+                               "status": {"$in": ["pending", "running"]}}):
+        return False
     job = await claim_job(db, kinds=["research_topics"], worker_id=worker_id, lease_seconds=300)
     if not job:
         return False
@@ -223,6 +227,11 @@ async def run_research_job(db, installation_id: str, api_key: str, model: str,
     usage: dict = {}
     run_id = f"{job['_id']}:{job['attempt_count']}"
     try:
+        dependency = job["payload"].get("discovery_job_id")
+        if dependency:
+            refresh = await db.jobs.find_one({"_id": dependency})
+            if not refresh or refresh.get("status") != "succeeded":
+                raise ResearchError("Source refresh failed. Refresh discovery sources again before regenerating suggestions.")
         topics = await research_topics(db, installation_id, api_key, model, usage)
         async with db.client.start_session() as session:
             async with await session.start_transaction():
@@ -534,3 +543,32 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
                     "available_at": now_utc(), "attempt_count": 0, "revision": 1,
                     "created_at": now_utc(), "updated_at": now_utc()}, session=session)
     return "topic_processed"
+
+
+async def regenerate_topics(db, installation_id: str, expected_revision: int) -> dict:
+    """Replace unselected suggestions; preserve conversations already authoring a post."""
+    workflow = await db.workflows.find_one({'installation_id': installation_id, 'active': True,
+        'kind': 'weekly_topics'})
+    if (not workflow or workflow['state'] not in {'AWAITING_TOPIC', 'RESEARCH_FAILED'}
+            or workflow.get('selected_topic') or workflow['revision'] != expected_revision):
+        raise TopicWorkflowError('Conversation changed; refresh before regenerating suggestions')
+    now = now_utc()
+    discovery = await db.jobs.find_one({'kind': 'discover_trends', 'payload.installation_id': installation_id},
+                                      sort=[('created_at', -1)])
+    payload = {'workflow_id': workflow['_id']}
+    if discovery and discovery.get('status') in {'pending', 'running', 'failed'}:
+        payload['discovery_job_id'] = discovery['_id']
+    async with db.client.start_session() as session:
+        async with await session.start_transaction():
+            result = await db.workflows.update_one({'_id': workflow['_id'], 'active': True,
+                'state': workflow['state'], 'revision': expected_revision},
+                {'$set': {'state': 'RESEARCH_PENDING', 'shortlist': [], 'error': None, 'updated_at': now},
+                 '$inc': {'revision': 1}}, session=session)
+            if result.modified_count != 1:
+                raise TopicWorkflowError('Conversation changed; refresh before regenerating suggestions')
+            await db.jobs.insert_one({'_id': str(uuid4()), 'schema_version': 1,
+                'kind': 'research_topics', 'dedupe_key': f"dashboard-research:{workflow['_id']}:{expected_revision}",
+                'payload': payload, 'status': 'pending',
+                'available_at': now, 'attempt_count': 0, 'revision': 1,
+                'created_at': now, 'updated_at': now}, session=session)
+    return {'id': workflow['_id'], 'state': 'RESEARCH_PENDING'}

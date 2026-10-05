@@ -4,10 +4,52 @@
   "max_candidates": 40,
   "max_pages": 12,
   "feeds": [
-    {"name": "Python Insider", "url": "https://blog.python.org/rss.xml", "domain": "blog.python.org"},
-    {"name": "TypeScript", "url": "https://devblogs.microsoft.com/typescript/feed/", "domain": "devblogs.microsoft.com"},
-    {"name": "GitHub Changelog", "url": "https://github.blog/changelog/feed/", "domain": "github.blog"},
-    {"name": "OpenAI News", "url": "https://openai.com/news/rss.xml", "domain": "openai.com"},
-    {"name": "Google Developers", "url": "https://developers.googleblog.com/feeds/posts/default?alt=rss", "domain": "developers.googleblog.com"}
-  ]
+    {
+      "name": "Python Insider",
+      "url": "https://blog.python.org/rss.xml",
+      "domain": "blog.python.org"
+    },
+    {
+      "name": "TypeScript",
+      "url": "https://devblogs.microsoft.com/typescript/feed/",
+      "domain": "devblogs.microsoft.com"
+    },
+    {
+      "name": "GitHub Changelog",
+      "url": "https://github.blog/changelog/feed/",
+      "domain": "github.blog"
+    },
+    {
+      "name": "OpenAI News",
+      "url": "https://openai.com/news/rss.xml",
+      "domain": "openai.com"
+    },
+    {
+      "name": "Google Developers",
+      "url": "https://developers.googleblog.com/feeds/posts/default?alt=rss",
+      "domain": "developers.googleblog.com"
+    },
+    {
+      "name": "AWS Architecture",
+      "url": "https://aws.amazon.com/blogs/architecture/feed/",
+      "domain": "aws.amazon.com"
+    },
+    {
+      "name": "Cloudflare",
+      "url": "https://blog.cloudflare.com/rss/",
+      "domain": "blog.cloudflare.com"
+    },
+    {
+      "name": "Hugging Face",
+      "url": "https://huggingface.co/blog/feed.xml",
+      "domain": "huggingface.co"
+    },
+    {
+      "name": "Outcome School",
+      "url": "https://outcomeschool.com/feed.xml",
+      "domain": "outcomeschool.com"
+    }
+  ],
+  "hackernews_enabled": true,
+  "github_enabled": true
 }

@@ -1,6 +1,6 @@
 """Owner-only Phase 3 schedule and conversation controls."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -135,3 +135,44 @@ async def start_now(request: Request):
         except TopicWorkflowError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"id": row["_id"], "state": row["state"]}
+
+
+@router.post("/discovery/refresh", status_code=202)
+async def refresh_discovery(request: Request):
+    require_session(request, write=True)
+    from app.storage.jobs import enqueue_job
+    settings, identity = context()
+    async with bound_database(settings, identity) as db:
+        # Coalesce concurrent manual refreshes into a fifteen-minute window.
+        slot = int(datetime.now(timezone.utc).timestamp()) // 900
+        job = await enqueue_job(db, kind="discover_trends", dedupe_key=f"manual-discovery:{identity}:{slot}",
+                                payload={"installation_id": identity})
+        return {"job_id": job["_id"], "status": job["status"]}
+
+
+@router.get("/discovery")
+async def discovery_status(request: Request):
+    require_session(request)
+    settings, identity = context()
+    async with bound_database(settings, identity) as db:
+        items = await db.trend_candidates.find({"collected_at": {"$gte": datetime.now(timezone.utc) - timedelta(hours=7)}}, {"signals": 0, "excerpt": 0}).sort(
+            "trend_score", -1).limit(10).to_list(length=10)
+        job = await db.jobs.find_one({"kind": "discover_trends", "payload.installation_id": identity},
+                                    sort=[("created_at", -1)])
+        return {"items": items, "timezone": settings.app_timezone, "job": {k: job.get(k) for k in ("_id", "status", "updated_at", "error_code")} if job else None}
+
+
+class RegenerateInput(BaseModel):
+    expected_revision: int = Field(ge=1)
+
+
+@router.post('/regenerate', status_code=202)
+async def regenerate(request: Request, body: RegenerateInput):
+    require_session(request, write=True)
+    from app.services.topic_workflow import regenerate_topics
+    settings, identity = context()
+    async with bound_database(settings, identity) as db:
+        try:
+            return await regenerate_topics(db, identity, body.expected_revision)
+        except (TopicWorkflowError, DuplicateKeyError) as exc:
+            raise HTTPException(409, 'Conversation changed; refresh before regenerating suggestions') from exc

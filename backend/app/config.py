@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     mongodb_uri: str | None = None
     mongodb_database: str | None = None
     gemini_api_key: str | None = None
+    github_token: str | None = None
     gemini_model: str | None = None
     telegram_bot_token: str | None = None
     linkedin_client_id: str | None = None

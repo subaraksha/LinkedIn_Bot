@@ -106,3 +106,58 @@ The default publishing switch remains off. Once enabled for an owner-reviewed li
 ### Pause, resume, and history (Phase 6)
 
 Pause and resume weekly invitations in the dashboard without losing the active conversation. Reply `CONTINUE` in Telegram for a recap of saved progress; if an approval was pending, request a fresh `FINAL` preview afterward. The dashboard lists published, skipped, and discarded cycles and lets you open their draft versions and feedback. Earlier topic choices and explicit feedback from published cycles help guide later suggestions and drafts. See [Phase 6 status](docs/phase-6-status.md).
+
+
+### Trend discovery (stages 1–2)
+
+The worker now collects Hacker News top/new stories, recently active GitHub repositories,
+and configured engineering RSS feeds every six hours. Collection starts when the worker
+starts and continues without an active topic conversation. The machine and process must
+remain running; missed windows are coalesced into the current window after restart.
+For collection without Telegram, run `uv run linkedin-agent-discover` instead. Both
+collectors use the same durable job claims; normally run only one collector.
+
+The dashboard's **Refresh discovery sources** button queues a bounded collection pass
+(manual requests are coalesced within fifteen minutes). A running collector is required.
+**Find topics now** uses candidates collected within seven hours, or performs bounded
+collection when insufficient cached evidence exists. Suggestions retain source snapshots
+for drafting and show an experimental trend ranking. Gemini matches suggestions to the
+saved owner profile and aims for balanced AI/backend coverage when evidence supports it.
+
+Edit `config/research-sources.json` to change feeds or disable `hackernews_enabled` and
+`github_enabled`. `lookback_days` now limits dated feed articles and HN stories; undated
+items remain eligible but receive no recency credit. `evergreen_days` is retained for
+configuration compatibility and is not used by this fresh-topic pipeline. GitHub searches
+include established, recently active repositories; push dates do not imply releases.
+Optionally set `GITHUB_TOKEN` in the ignored `.env` for higher API limits. Never put tokens
+in source configuration. Rate-limited GitHub collection stops for that pass while other
+sources remain usable.
+
+Collection is capped at 40 candidates, with capacity shared across sources. Extraction
+remains capped at 12 pages and uses the existing public-address checks, pinned requests,
+size limits and same-domain redirect restrictions. Tracking query parameters and fragments
+are removed before URL deduplication; multiple signals for one URL retain separate histories.
+
+Engagement observations measure changes between collection passes, rather than lifetime
+engagement divided by age. Rankings normalize engagement logarithmically within each
+provider and combine it with recency and measured velocity. Missing velocity is explicitly
+unknown until another observation exists. RSS ranks by recency. Scores are heuristics,
+not probabilities or comparable evidence of adoption; no semantic clustering or independent
+cross-source topic score is implemented yet. Relevance remains Gemini-based, not numeric.
+
+The collector creates separate history/retention indexes without changing the existing
+foundation migration checksum. Candidate and engagement histories expire after 90 days;
+source snapshots used by drafts remain intact. Failed collection passes retain durable job
+status; the next scheduled or manual pass can retry. Source failures degrade gracefully;
+an entirely empty pass fails rather than replacing saved evidence.
+
+Owner-authenticated endpoints: `POST /api/v1/topics/discovery/refresh` queues collection;
+`GET /api/v1/topics/discovery` returns up to ten recently collected ranked items and the
+latest collection job status. Reddit, Brave, Firecrawl and embeddings are deferred.
+
+The dashboard polls discovery status every fifteen seconds and shows queued, running,
+completed and failed refreshes with a timestamp. Topic research remains unclaimed while
+any discovery pass is pending or running, so waiting consumes neither research retries nor
+its lease. Dashboard regeneration records the relevant refresh job as a dependency; if it
+fails, research reports the failure instead of silently generating from older cached data.
+Retry discovery and then regenerate suggestions. The collector must remain running.

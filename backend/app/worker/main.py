@@ -12,6 +12,7 @@ from app.integrations.telegram_pairing import (
     PairingError, claim_receiver, mark_receiver_restart, mongo_client,
     record_owner_update, release_receiver,
 )
+from app.services.trend_discovery import discovery_loop
 from app.services.approval_intake import drain_owner_messages
 from app.services.draft_workflow import dispatch_draft_previews, run_draft_job
 from app.services.topic_workflow import (
@@ -38,6 +39,7 @@ async def receive() -> None:
     bot_id = None
     research_task = None
     draft_task = None
+    discovery_task = None
     try:
         identity = await telegram.identity()
         bot_id = identity["id"]
@@ -60,6 +62,7 @@ async def receive() -> None:
             f"publishing {'enabled' if settings.publishing_enabled else 'disabled'}",
             flush=True,
         )
+        discovery_task = asyncio.create_task(discovery_loop(db, installation_id, lease_token + ":discovery"))
         poll_failures = 0
         while True:
             if research_task and research_task.done():
@@ -118,6 +121,12 @@ async def receive() -> None:
             await dispatch_topic_messages(db, telegram, installation_id)
             await dispatch_draft_previews(db, telegram, installation_id)
     finally:
+        if discovery_task:
+            discovery_task.cancel()
+            try:
+                await discovery_task
+            except asyncio.CancelledError:
+                pass
         if research_task and not research_task.done():
             research_task.cancel()
             try:

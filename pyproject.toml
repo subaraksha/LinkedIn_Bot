@@ -21,6 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
+linkedin-agent-discover = "app.cli.discover:run"
 linkedin-agent-api = "app.main:run"
 linkedin-agent-worker = "app.worker.main:run"
 linkedin-agent-diagnose = "app.cli.diagnose:run"
