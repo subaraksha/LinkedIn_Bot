@@ -12,6 +12,18 @@ from app.services.topic_research import ResearchError, research_topics
 from app.storage.jobs import claim_job, finish_job
 
 
+
+TOPIC_SELECTION_STATES = {
+    "AWAITING_TOPIC", "AWAITING_INPUT", "READY_FOR_DRAFT", "DRAFT_GENERATING",
+    "DRAFT_REVIEW", "AWAITING_REVIEW", "DRAFT_FAILED", "PREVIEW_SENDING",
+    "AWAITING_APPROVAL", "APPROVAL_VERIFIED", "PUBLISH_PENDING",
+}
+
+
+def is_topic_navigation(text: str) -> bool:
+    upper = text.strip().upper()
+    return upper == "TOPICS" or upper == "CHOOSE" or upper.startswith("CHOOSE ")
+
 class TopicWorkflowError(ValueError):
     pass
 
@@ -200,7 +212,9 @@ def format_shortlist(workflow: dict) -> str:
     for index, topic in enumerate(workflow["shortlist"], 1):
         url = topic["sources"][0]["url"]
         source = url if len(url) <= 240 else "See the dashboard for the full source link"
-        parts.append(f"{index}. {topic['title'][:100]}\nWhy now: {topic['why_now'][:100]}\nWhy it fits: {topic['why_you'][:100]}\nAngle: {topic['angle'][:100]}\nSource: {source}")
+        explanation = f"\nMeaning: {topic['explanation'][:150]}" if topic.get('explanation') else ""
+        takeaway = f"\nYou'll learn: {topic['reader_takeaway'][:150]}" if topic.get('reader_takeaway') else ""
+        parts.append(f"{index}. {topic['title'][:100]}{explanation}{takeaway}\nWhy it fits: {topic['why_you'][:100]}\nSource: {source}")
     choice = ("CHOOSE <number>" if workflow["shortlist_revision"] == 1 else
               f"CHOOSE {workflow['shortlist_revision']}:<number>")
     parts.append(f"Reply {choice}, ALTERNATIVES, MY TOPIC: <idea>, or SKIP WEEK.")
@@ -283,7 +297,7 @@ async def run_research_job(db, installation_id: str, api_key: str, model: str,
                 if result.modified_count:
                     await queue_message(db, workflow,
                         f"research_failed:{workflow['_id']}:{workflow['revision']}",
-                        "I couldn't find four reliable topic ideas this week. Reply MY TOPIC: <idea> to continue, or SKIP WEEK.",
+                        "I couldn't find suitable sourced topics for your profile. Reply MY TOPIC: <idea> to continue, or SKIP WEEK.",
                         session=session)
         await finish_job(db, job_id=job["_id"], worker_id=worker_id,
                          revision=job["revision"], status="failed", error_code="research_unavailable")
@@ -442,9 +456,9 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
         next_state = "SKIPPED" if upper == "SKIP WEEK" else "DISCARDED"
         updates["active"] = False
         reply = "This week's topic conversation is closed. No post was created or published."
-    elif upper in {"TOPICS", "CONTINUE"} and state == "AWAITING_TOPIC":
-        reply = format_shortlist(workflow)
-    elif upper == "TOPICS" and state == "AWAITING_INPUT":
+    elif upper == "TOPICS" and state in TOPIC_SELECTION_STATES:
+        reply = format_shortlist(workflow) if workflow.get("shortlist") else "No saved suggestions are available. Start a new topic conversation from the dashboard."
+    elif upper == "CONTINUE" and state == "AWAITING_TOPIC":
         reply = format_shortlist(workflow)
     elif upper == "CONTINUE" and state == "AWAITING_INPUT":
         reply = "What is your view on this topic? Share a practical observation, concern, or example. You can also reply SKIP INPUT."
@@ -466,7 +480,7 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
             updates["input_step"] = "perspective"
             next_state = "AWAITING_INPUT"
             reply = "What is your view on this topic? Share a practical observation, concern, or example. You can also reply SKIP INPUT."
-    elif state in {"AWAITING_TOPIC", "AWAITING_INPUT"} and (
+    elif state in TOPIC_SELECTION_STATES and (
         (match := re.fullmatch(r"CHOOSE (\d+):(\d+)", upper)) or
         (short_match := re.fullmatch(r"(?:CHOOSE )?(\d+)", upper))
     ):
@@ -477,13 +491,22 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
                      "for this refreshed list. Reply TOPICS to see it again.")
         elif revision != workflow["shortlist_revision"] or not 1 <= number <= len(workflow["shortlist"]):
             reply = "That choice is out of date. Reply TOPICS to see the current list."
+        elif workflow.get("selected_topic") == workflow["shortlist"][number - 1]:
+            reply = f"That topic is already selected: {workflow['selected_topic']['title']}. Your current progress is saved. Reply CONTINUE to see the next step."
         else:
             updates["selected_topic"] = workflow["shortlist"][number - 1]
+            updates["topic_selection_revision"] = workflow.get("topic_selection_revision", 1) + 1
+            updates.update({"draft_id": None, "generation_id": None, "generation_feedback": None,
+                            "draft_error": None, "pending_preview": None, "preview_id": None,
+                            "approval_id": None, "envelope_hash": None, "publication_error": None})
             updates["perspective"] = None
             updates["experience"] = "unconfirmed"
             updates["input_step"] = "perspective"
             next_state = "AWAITING_INPUT"
-            reply = "What is your view on this topic? Share a practical observation, concern, or example. You can also reply SKIP INPUT."
+            reply = (f"Selected: {updates['selected_topic']['title']}\n"
+                     "What is your view on this topic? Share a practical observation, concern, or example. You can also reply SKIP INPUT.")
+    elif is_topic_navigation(text) and state in TOPIC_SELECTION_STATES:
+        reply = "Use CHOOSE <number>, or CHOOSE <list revision>:<number> for a refreshed list. Reply TOPICS to see your suggestions."
     elif state == "AWAITING_INPUT" and upper in {"SKIP INPUT", "DRAFT"}:
         next_state = "READY_FOR_DRAFT"
         reply = "Saved. Reply DRAFT to create the first draft. No post has been created or published yet."
@@ -506,7 +529,7 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
     elif state == "RESEARCH_FAILED":
         reply = "Research needs attention. You can reply MY TOPIC: <idea> or SKIP WEEK."
     elif state == "READY_FOR_DRAFT":
-        reply = "Your input is saved and ready for drafting. Draft creation arrives in Phase 4. Reply DISCARD to close this conversation."
+        reply = "Your input is saved. Reply DRAFT to create a draft, CHOOSE <number> to switch topic, or DISCARD to close this conversation."
     if reply is None:
         return None
     async with db.client.start_session() as session:
@@ -532,6 +555,18 @@ async def handle_topic_message(db, message: dict, installation_id: str) -> str |
                     "workflow_id": workflow["_id"], "status": "pending"},
                     {"$set": {"status": "cancelled", "updated_at": now_utc()}},
                     session=session)
+            if "topic_selection_revision" in updates:
+                # The workflow revision fences already-running generation/publication tasks.
+                await db.jobs.update_many({"kind": "generate_draft", "payload.workflow_id": workflow["_id"],
+                    "status": "pending"}, {"$set": {"status": "cancelled_by_owner", "updated_at": now_utc()}}, session=session)
+                await db.jobs.update_many({"kind": "publish", "workflow_id": workflow["_id"],
+                    "status": "pending"}, {"$set": {"status": "cancelled_by_owner", "updated_at": now_utc()}}, session=session)
+                if workflow.get("approval_id"):
+                    await db.approval_receipts.update_one({"_id": workflow["approval_id"], "status": "pending_publication"},
+                        {"$set": {"status": "cancelled_by_owner"}}, session=session)
+                await db.messages.update_many({"workflow_id": workflow["_id"], "direction": "outbound",
+                    "kind": {"$in": ["phase3_topic", "phase4_preview"]}, "status": "pending"},
+                    {"$set": {"status": "cancelled", "updated_at": now_utc()}}, session=session)
             await queue_message(db, workflow, f"topic_reply:{message['_id']}", reply, session=session)
             await db.messages.update_one({"_id": message["_id"]},
                 {"$set": {"status": "processed", "processed_at": now_utc(),

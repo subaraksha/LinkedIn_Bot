@@ -48,6 +48,11 @@
       "name": "Outcome School",
       "url": "https://outcomeschool.com/feed.xml",
       "domain": "outcomeschool.com"
+    },
+    {
+      "name": "LangChain",
+      "url": "https://www.langchain.com/blog/rss.xml",
+      "domain": "www.langchain.com"
     }
   ],
   "hackernews_enabled": true,

@@ -161,3 +161,38 @@ any discovery pass is pending or running, so waiting consumes neither research r
 its lease. Dashboard regeneration records the relevant refresh job as a dependency; if it
 fails, research reports the failure instead of silently generating from older cached data.
 Retry discovery and then regenerate suggestions. The collector must remain running.
+
+During drafting and review, reply TOPICS to see the saved shortlist and CHOOSE <number>
+to switch topics (use CHOOSE <list revision>:<number> for refreshed shortlists). Switching
+clears the current topic's perspective, experience, draft pointer and approval, cancels
+queued work, and returns to input for the new topic. Earlier draft versions stay in history
+but cannot be restored into a different topic selection. An in-flight or uncertain LinkedIn
+publication must be resolved before switching.
+
+
+### Persona-led topics and plain-language drafts
+
+Topic selection now receives sanitized content goals, career context, audience, technical
+level, style preferences, writing samples and saved rejection reasons. Public suggestions
+include a plain-language explanation and a reader takeaway. Model-assessed persona fit
+(60%) and practical value (25%) outweigh the trend signal (15%); these are heuristic
+ratings, not measured confidence. Candidates below the fit/usefulness thresholds are
+rejected. A shortlist can contain one to five topics instead of padding to four weak ideas.
+Configured profile privacy terms are enforced on suggestions as well as drafts.
+
+New source-backed drafts first extract a cited problem/approach/limitations brief, then
+write from that brief and the original evidence. This adds one model request for new drafts;
+revisions keep their existing wording-preservation rules and do not repeat this step.
+Writing instructions favor practical solutions, plain language and illustrative examples
+when helpful, with provider attribution separated from promotional language. Source excerpts
+are capped at 8,000 characters; the existing grounding audit remains in place. Writing samples
+are used for voice only, never as evidence of personal experience. LangChain's public RSS feed
+is included among discovery sources.
+
+Use **Save topic preference** in the dashboard to record reasons such as too advanced,
+not relevant to current work, or too promotional. The newest twenty preferences guide
+future topic selection. The owner-authenticated `POST /api/v1/topics/feedback` endpoint
+stores the reason locally. Sanitized profile context, relevant feedback and source text are
+sent to the configured Gemini service for generation; confidential terms are excluded from
+persona context. General work context guides selection without authorizing invented
+first-person claims. Previously generated suggestions/drafts are not rewritten automatically.

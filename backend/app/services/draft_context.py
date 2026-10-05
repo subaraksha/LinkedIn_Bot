@@ -32,8 +32,9 @@ def build_draft_context(snapshot: dict) -> DraftContext:
                "interests": safe(profile.interests), "content_goals": safe(profile.content_goals)},
         style={"tone": profile.tone, "length": profile.length,
                "technical_depth": profile.technical_depth,
+               "word_target": {"short": "100–160 words", "medium": "160–240 words", "long": "240–350 words"}[profile.length],
                "use_emojis": profile.use_emojis, "use_hashtags": profile.use_hashtags,
-               "avoid_styles": safe(profile.avoid_styles)},
+               "avoid_styles": safe(profile.avoid_styles), "writing_samples": safe(profile.writing_samples)},
     )
 
 

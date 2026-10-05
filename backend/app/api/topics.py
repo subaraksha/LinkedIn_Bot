@@ -176,3 +176,21 @@ async def regenerate(request: Request, body: RegenerateInput):
             return await regenerate_topics(db, identity, body.expected_revision)
         except (TopicWorkflowError, DuplicateKeyError) as exc:
             raise HTTPException(409, 'Conversation changed; refresh before regenerating suggestions') from exc
+
+
+class TopicFeedbackInput(BaseModel):
+    reason: str = Field(min_length=5, max_length=1000)
+
+
+@router.post('/feedback', status_code=201)
+async def save_topic_feedback(request: Request, body: TopicFeedbackInput):
+    require_session(request, write=True)
+    from uuid import uuid4
+    settings, identity = context()
+    reason = body.reason.strip()
+    if len(reason) < 5:
+        raise HTTPException(422, 'Describe what should change in at least five characters')
+    async with bound_database(settings, identity) as db:
+        await db.topic_feedback.insert_one({'_id': str(uuid4()), 'installation_id': identity,
+            'reason': reason, 'created_at': datetime.now(timezone.utc)})
+    return {'status': 'saved'}
